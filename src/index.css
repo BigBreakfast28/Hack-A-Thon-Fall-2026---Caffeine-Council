@@ -176,3 +176,10 @@ h1 { font-size: clamp(48px, 6.1vw, 82px); line-height: .92; letter-spacing: -.03
   .gallery-header { display: block; margin-top: 35px; }.storage-card { margin-top: 25px; width: 100%; }
   .mini-brand { display: none; }.nav-row { grid-template-columns: 1fr 1fr; }.nav-row > :last-child { justify-self: end; }
 }
+
+/* Custom color picker (opened by the palette button) */
+.suggested-colors > div { position: relative; }
+.hidden-color-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+/* Step picture sent by the server (AI-generated or a file) */
+.demo-image { width: 100%; max-height: 180px; object-fit: contain; border-radius: 14px; }
