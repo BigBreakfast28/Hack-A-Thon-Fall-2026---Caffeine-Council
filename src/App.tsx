@@ -1,25 +1,18 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import {
+  getLessonSteps,
+  lessonsForStyle,
+  styleById,
+  styles,
+  type IconName,
+  type Lesson,
+  type LessonStep,
+  type StyleId,
+} from "./lessons";
 
 type Screen = "home" | "lessons" | "canvas" | "gallery";
-type IconName =
-  | "apple"
-  | "bamboo"
-  | "city"
-  | "lock"
-  | "arrow"
-  | "home"
-  | "pencil"
-  | "marker"
-  | "brush"
-  | "eraser"
-  | "download"
-  | "print"
-  | "trash"
-  | "sparkle"
-  | "palette"
-  | "room"
-  | "train"
-  | "building";
+
+const GALLERY_LIMIT = 12;
 
 const colors = ["#E97962", "#EDB44D", "#789D7D", "#6F9FC6", "#755E8B", "#323B43"];
 
@@ -78,19 +71,7 @@ function SquishButton({ children, onClick, className = "", label }: { children: 
   return <button className={`squish-button ${className}`} onClick={onClick} aria-label={label}>{children}</button>;
 }
 
-const styles = [
-  { title: "Realism", subtitle: "Draw what you see", icon: "apple" as IconName, tone: "peach" },
-  { title: "Sumi-e", subtitle: "Paint with ink", icon: "bamboo" as IconName, tone: "sage" },
-  { title: "Graphic Novel", subtitle: "Tell a story", icon: "city" as IconName, tone: "blue" },
-];
-
-const lessons = [
-  { title: "Cozy room", tags: ["Perspective", "Color"], icon: "room" as IconName, tone: "peach" },
-  { title: "Little train", tags: ["Shapes", "Shading"], icon: "train" as IconName, tone: "blue" },
-  { title: "Tall building", tags: ["Perspective"], icon: "building" as IconName, tone: "yellow" },
-];
-
-function HomeScreen({ go }: { go: (screen: Screen) => void }) {
+function HomeScreen({ go, pickStyle }: { go: (screen: Screen) => void; pickStyle: (style: StyleId) => void }) {
   return (
     <main className="screen home-screen">
       <div className="top-actions">
@@ -102,7 +83,7 @@ function HomeScreen({ go }: { go: (screen: Screen) => void }) {
       </header>
       <section className="style-grid" aria-label="Art styles">
         {styles.map((style, index) => (
-          <button key={style.title} className={`style-card tone-${style.tone}`} onClick={() => go(index === 0 ? "lessons" : "canvas")}>
+          <button key={style.id} className={`style-card tone-${style.tone}`} onClick={() => pickStyle(style.id)}>
             <span className="card-number">0{index + 1}</span>
             <span className="style-illustration"><Icon name={style.icon} size={80}/></span>
             <span className="style-copy"><strong>{style.title}</strong><span>{style.subtitle}</span></span>
@@ -115,7 +96,8 @@ function HomeScreen({ go }: { go: (screen: Screen) => void }) {
   );
 }
 
-function LessonsScreen({ go }: { go: (screen: Screen) => void }) {
+function LessonsScreen({ go, style, pickLesson }: { go: (screen: Screen) => void; style: StyleId; pickLesson: (lesson: Lesson) => void }) {
+  const artStyle = styleById(style);
   return (
     <main className="screen lessons-screen">
       <nav className="nav-row">
@@ -123,10 +105,10 @@ function LessonsScreen({ go }: { go: (screen: Screen) => void }) {
         <span className="mini-brand"><Sun compact/> Sunny's Art Club</span>
         <SquishButton className="icon-button muted" onClick={() => go("gallery")} label="Open parent gallery"><Icon name="lock" size={23}/></SquishButton>
       </nav>
-      <header className="lesson-header"><p className="eyebrow">REALISM LESSONS</p><h1>Choose something to draw</h1><p className="subhead">Tap a picture to begin.</p></header>
+      <header className="lesson-header"><p className="eyebrow">{artStyle.title.toUpperCase()} LESSONS</p><h1>Choose something to draw</h1><p className="subhead">Tap a picture to begin.</p></header>
       <section className="lesson-grid">
-        {lessons.map((lesson) => (
-          <button key={lesson.title} className={`lesson-card tone-${lesson.tone}`} onClick={() => go("canvas")}>
+        {lessonsForStyle(style).map((lesson) => (
+          <button key={lesson.id} className={`lesson-card tone-${lesson.tone}`} onClick={() => pickLesson(lesson)}>
             <span className="lesson-art"><Icon name={lesson.icon} size={105}/><span className="spark spark-one">✦</span><span className="spark spark-two">✦</span></span>
             <span className="lesson-info"><strong>{lesson.title}</strong><span className="tags">{lesson.tags.map(tag => <span key={tag}>{tag}</span>)}</span></span>
             <span className="round-arrow">→</span>
@@ -137,21 +119,35 @@ function LessonsScreen({ go }: { go: (screen: Screen) => void }) {
   );
 }
 
-function CanvasScreen({ go, addArtwork }: { go: (screen: Screen) => void; addArtwork: (art: Artwork) => void }) {
+function CanvasScreen({ go, lesson, addArtwork }: { go: (screen: Screen) => void; lesson: Lesson; addArtwork: (art: Artwork) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const colorInputRef = useRef<HTMLInputElement>(null);
   const [drawing, setDrawing] = useState(false);
   const [hasDrawn, setHasDrawn] = useState(false);
   const [color, setColor] = useState(colors[0]);
   const [tool, setTool] = useState<"pencil" | "marker" | "brush">("pencil");
   const [step, setStep] = useState(1);
   const [complete, setComplete] = useState(false);
-  const directions = [
-    { title: "Let’s find the room", copy: "Start with one big, soft rectangle. It can be wobbly—rooms are cozy that way.", demo: "One big rectangle makes the room." },
-    { title: "Add a cozy corner", copy: "Draw two gentle lines toward the middle. Now your room has walls and a floor.", demo: "Two lines give the room depth." },
-    { title: "Make it feel like home", copy: "Add a window, a chair, or your favorite toy. Pick one detail you would love in your room.", demo: "Simple shapes become favorite things." },
-    { title: "Final touches", copy: "Look for one empty spot. Add a tiny detail or a splash of color, then your picture is complete.", demo: "A final detail makes it yours." },
-  ];
-  const direction = directions[step - 1];
+  const [steps, setSteps] = useState<LessonStep[] | null>(null);
+
+  // Load this lesson's steps (from the server if connected, otherwise starter steps).
+  useEffect(() => {
+    let cancelled = false;
+    setSteps(null);
+    setStep(1);
+    getLessonSteps(lesson).then((loaded) => {
+      if (!cancelled) setSteps(loaded);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [lesson]);
+
+  const totalSteps = steps?.length ?? 1;
+  const isLastStep = step >= totalSteps;
+  const direction: LessonStep = steps?.[step - 1] ?? { title: "Getting your lesson ready", copy: "Sunny is setting up your lesson. One moment!", demo: "Almost ready..." };
+  const styleTitle = styleById(lesson.style).title;
+  const isCustomColor = !colors.includes(color);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -203,38 +199,47 @@ function CanvasScreen({ go, addArtwork }: { go: (screen: Screen) => void; addArt
   };
   const saveArtwork = () => {
     const data = canvasRef.current?.toDataURL("image/png");
-    if (data) addArtwork({ data, date: "Just now", title: "My cozy room" });
+    if (data) {
+      const date = new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      addArtwork({ data, date, title: `My ${lesson.title.toLowerCase()}` });
+    }
     go("gallery");
   };
 
   return (
     <main className="canvas-screen">
       <aside className="guide-panel">
-        <div className="canvas-nav"><SquishButton className="icon-button cream" onClick={() => go("lessons")} label="Back"><Icon name="arrow"/></SquishButton><span className="lesson-pill">REALISM · COZY ROOM</span></div>
+        <div className="canvas-nav"><SquishButton className="icon-button cream" onClick={() => go("lessons")} label="Back"><Icon name="arrow"/></SquishButton><span className="lesson-pill">{styleTitle.toUpperCase()} · {lesson.title.toUpperCase()}</span></div>
         <div className="guide-copy">
-          <span className={`step-pill ${step === 4 ? "final" : ""}`}>{step === 4 ? "FINAL STEP" : `STEP ${step} OF 4`}</span>
+          <span className={`step-pill ${isLastStep ? "final" : ""}`}>{!steps ? "LOADING" : isLastStep ? "FINAL STEP" : `STEP ${step} OF ${totalSteps}`}</span>
           <h2>{direction.title}</h2>
           <p>{direction.copy}</p>
-          <SquishButton
-            className={`next-step-button ${step === 4 ? "finish" : ""}`}
-            onClick={() => step < 4 ? setStep(step + 1) : setComplete(true)}
+          {steps && <SquishButton
+            className={`next-step-button ${isLastStep ? "finish" : ""}`}
+            onClick={() => !isLastStep ? setStep(step + 1) : setComplete(true)}
           >
-            {step === 4 ? "Finish drawing" : "Next step"} <span aria-hidden="true">→</span>
-          </SquishButton>
+            {isLastStep ? "Finish drawing" : "Next step"} <span aria-hidden="true">→</span>
+          </SquishButton>}
         </div>
         <div className="demonstration-card" aria-label="Drawing demonstration">
           <span className="demo-label"><Icon name="sparkle" size={17}/> WATCH SUNNY DRAW</span>
           <div className="demo-paper">
-            <Icon name="room" size={128}/>
-            <svg className="demo-stroke" viewBox="0 0 240 120" fill="none" aria-hidden="true">
-              <path d="M28 96V24H210V96" pathLength="1"/>
-            </svg>
-            <span className="demo-pencil"><Icon name="pencil" size={32}/></span>
+            {direction.imageUrl ? (
+              <img className="demo-image" src={direction.imageUrl} alt={direction.demo}/>
+            ) : (
+              <>
+                <Icon name={lesson.icon} size={128}/>
+                <svg className="demo-stroke" viewBox="0 0 240 120" fill="none" aria-hidden="true">
+                  <path d="M28 96V24H210V96" pathLength="1"/>
+                </svg>
+                <span className="demo-pencil"><Icon name="pencil" size={32}/></span>
+              </>
+            )}
           </div>
           <strong>{direction.demo}</strong>
         </div>
-        <div className="mascot-talk"><Sun mood={complete ? "celebrating" : step > 1 ? "thinking" : "idle"}/><div className="speech-bubble">{complete ? "You made it!" : step === 4 ? "Nearly there!" : step > 1 ? "Keep going!" : "Start right here"}</div></div>
-        <div className="suggested-colors"><span>COLORS TO TRY</span><div>{colors.slice(0, 4).map(c => <button key={c} aria-label="Choose color" className={color === c ? "selected" : ""} style={{ backgroundColor: c }} onClick={() => setColor(c)}/>) }<button className="choice-color" aria-label="Your color choice"><Icon name="palette" size={23}/></button></div></div>
+        <div className="mascot-talk"><Sun mood={complete ? "celebrating" : step > 1 ? "thinking" : "idle"}/><div className="speech-bubble">{complete ? "You made it!" : isLastStep && steps ? "Nearly there!" : step > 1 ? "Keep going!" : "Start right here"}</div></div>
+        <div className="suggested-colors"><span>COLORS TO TRY</span><div>{colors.slice(0, 4).map(c => <button key={c} aria-label="Choose color" className={color === c ? "selected" : ""} style={{ backgroundColor: c }} onClick={() => setColor(c)}/>) }<button className={`choice-color ${isCustomColor ? "selected" : ""}`} aria-label="Pick your own color" onClick={() => colorInputRef.current?.click()} style={isCustomColor ? { background: color } : undefined}><Icon name="palette" size={23}/></button><input ref={colorInputRef} type="color" className="hidden-color-input" value={color} onChange={(e) => setColor(e.target.value)} aria-hidden="true" tabIndex={-1}/></div></div>
       </aside>
       <section className="drawing-area">
         <div className="paper-wrap">
@@ -268,7 +273,7 @@ function GalleryScreen({ go, artworks, onRemove, onWipe }: { go: (screen: Screen
   return (
     <main className="screen gallery-screen">
       <nav className="nav-row"><SquishButton className="icon-button" onClick={() => go("home")} label="Home"><Icon name="home"/></SquishButton><span className="parent-badge"><Icon name="lock" size={17}/> GROWN-UPS</span><span/></nav>
-      <header className="gallery-header"><div><p className="eyebrow">THE DIGITAL FRIDGE</p><h1>Look what they made!</h1><p className="subhead">A little gallery of big ideas.</p></div><div className="storage-card"><span><strong>{artworks.length}</strong> of 12 spots used</span><div className="storage-track"><i style={{ width: `${Math.max(8, artworks.length / 12 * 100)}%` }}/></div><small>Kept in memory only. Closing the app clears it.</small><button className="squish-button wipe-button" onClick={onWipe}>Wipe volatile memory</button></div></header>
+      <header className="gallery-header"><div><p className="eyebrow">THE DIGITAL FRIDGE</p><h1>Look what they made!</h1><p className="subhead">A little gallery of big ideas.</p></div><div className="storage-card"><span><strong>{artworks.length}</strong> of {GALLERY_LIMIT} spots used</span><div className="storage-track"><i style={{ width: `${Math.max(8, artworks.length / GALLERY_LIMIT * 100)}%` }}/></div><small>Kept in memory only. Closing the app clears it.</small><button className="squish-button wipe-button" onClick={onWipe}>Wipe volatile memory</button></div></header>
       {artworks.length ? <section className="art-grid">{artworks.map((art, index) => <article className="art-card" key={`${art.title}-${index}`}><div className="art-image"><img src={art.data} alt={art.title}/><button className="delete-art" onClick={() => remove(index)} aria-label="Delete artwork"><Icon name="trash" size={20}/></button></div><div className="art-meta"><div><strong>{art.title}</strong><span>{art.date}</span></div><div className="art-actions"><SquishButton label="Download" onClick={() => download(art)}><Icon name="download" size={22}/></SquishButton><SquishButton label="Print" onClick={() => print(art)}><Icon name="print" size={22}/></SquishButton></div></div></article>)}</section> : <section className="empty-gallery"><div className="empty-doodle"><Icon name="sparkle" size={55}/></div><h2>Your fridge is ready</h2><p>Finish a drawing and save it here for everyone to admire.</p><SquishButton onClick={() => go("lessons")}>Make some art</SquishButton></section>}
     </main>
   );
@@ -276,10 +281,25 @@ function GalleryScreen({ go, artworks, onRemove, onWipe }: { go: (screen: Screen
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("home");
+  const [style, setStyle] = useState<StyleId>("realism");
+  const [lesson, setLesson] = useState<Lesson>(() => lessonsForStyle("realism")[0]);
   // Artwork lives in RAM only. Closing the app or tapping "Wipe volatile memory" clears it.
   const [artworks, setArtworks] = useState<Artwork[]>([]);
-  const addArtwork = (art: Artwork) => setArtworks((current) => [art, ...current].slice(0, 12));
+  const addArtwork = (art: Artwork) => setArtworks((current) => [art, ...current].slice(0, GALLERY_LIMIT));
   const removeArtwork = (index: number) => setArtworks((current) => current.filter((_, i) => i !== index));
   const wipeMemory = () => setArtworks([]);
-  return screen === "home" ? <HomeScreen go={setScreen}/> : screen === "lessons" ? <LessonsScreen go={setScreen}/> : screen === "canvas" ? <CanvasScreen go={setScreen} addArtwork={addArtwork}/> : <GalleryScreen go={setScreen} artworks={artworks} onRemove={removeArtwork} onWipe={wipeMemory}/>;
+
+  const pickStyle = (next: StyleId) => {
+    setStyle(next);
+    setScreen("lessons");
+  };
+  const pickLesson = (next: Lesson) => {
+    setLesson(next);
+    setScreen("canvas");
+  };
+
+  if (screen === "home") return <HomeScreen go={setScreen} pickStyle={pickStyle}/>;
+  if (screen === "lessons") return <LessonsScreen go={setScreen} style={style} pickLesson={pickLesson}/>;
+  if (screen === "canvas") return <CanvasScreen key={lesson.id} go={setScreen} lesson={lesson} addArtwork={addArtwork}/>;
+  return <GalleryScreen go={setScreen} artworks={artworks} onRemove={removeArtwork} onWipe={wipeMemory}/>;
 }

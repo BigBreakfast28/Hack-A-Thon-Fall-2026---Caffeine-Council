@@ -1,0 +1,63 @@
+# Connecting lessons to the server
+
+The app no longer hardcodes lesson steps. All lesson content lives in `src/lessons.ts`.
+
+## How it works
+
+When a kid opens a lesson, the app calls `getLessonSteps(lesson)`:
+
+1. If `VITE_API_URL` is set, it asks the server for that lesson's steps.
+2. If it isn't set, or the server fails or sends the wrong shape, it uses the starter steps in `src/lessons.ts`.
+
+So the demo always works, even while the server is down.
+
+## Turning the server on
+
+Create a file named `.env` in the project folder (Git already ignores it):
+
+```
+VITE_API_URL=http://your-vultr-server:8000
+```
+
+Restart the dev server (or rebuild) after changing it.
+
+**Never put the Gemini or ElevenLabs keys in this file or anywhere in the React code.** Anything in the front end can be seen by anyone who opens the app. The keys belong only on the server.
+
+## What the app asks for
+
+```
+GET {VITE_API_URL}/api/lessons/{lessonId}?style={styleId}
+```
+
+- `lessonId`: for example `cozy-room`, `little-train`, `bamboo-stalk` (full list in `src/lessons.ts`)
+- `styleId`: `realism`, `sumi-e`, or `graphic-novel`
+
+## What the server must send back
+
+```json
+{
+  "steps": [
+    {
+      "title": "Let's find the room",
+      "copy": "Start with one big, soft rectangle.",
+      "demo": "One big rectangle makes the room.",
+      "imageUrl": "https://.../step1.png"
+    }
+  ]
+}
+```
+
+| Field | Required | What it is |
+|---|---|---|
+| `title` | yes | Short heading for the step |
+| `copy` | yes | The instruction the kid reads (and Sunny says out loud) |
+| `demo` | yes | One-line caption under the picture |
+| `imageUrl` | no | Picture for this step. A normal link or a `data:image/png;base64,...` string both work. If missing, the lesson's icon is shown. |
+
+Any number of steps works; the app counts them.
+
+The server must allow the app's address to call it (CORS). For a hackathon, allowing all origins is fine.
+
+## Adding a new lesson
+
+Add a line to the `lessons` list in `src/lessons.ts`. It shows up under its style automatically. Starter steps for it are optional.
