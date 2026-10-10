@@ -1,4 +1,10 @@
-@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@500;600;700;800&display=swap');
+@import '@fontsource/nunito/500.css';
+@import '@fontsource/nunito/600.css';
+@import '@fontsource/nunito/700.css';
+@import '@fontsource/nunito/800.css';
+@import '@fontsource/baloo-2/600.css';
+@import '@fontsource/baloo-2/700.css';
+@import '@fontsource/baloo-2/800.css';
 @import 'tailwindcss';
 
 :root {
@@ -135,6 +141,7 @@ h1 { font-size: clamp(48px, 6.1vw, 82px); line-height: .92; letter-spacing: -.03
 .storage-track { height: 10px; margin: 10px 0; border-radius: 20px; background: #e5e3db; overflow: hidden; }
 .storage-track i { display: block; height: 100%; border-radius: inherit; background: #8eaf91; }
 .storage-card small { color: #74807c; font-weight: 700; }
+.wipe-button { margin-top: 12px; width: 100%; font-size: 14px; padding: 9px 14px; }
 .art-grid { max-width: 1160px; margin: auto; display: grid; grid-template-columns: repeat(2, 1fr); align-items: start; gap: 24px; }
 .art-card { border: 2px solid var(--ink); border-radius: 26px; overflow: hidden; background: var(--paper); box-shadow: var(--shadow); }
 .art-card:nth-child(3n + 2) { transform: rotate(.5deg); }

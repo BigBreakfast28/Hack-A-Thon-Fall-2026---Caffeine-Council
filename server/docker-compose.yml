@@ -1,0 +1,33 @@
+# Run with the key in your shell, not in a file:
+#   export GEMINI_API_KEY=...   (use the PAID tier; see ../ARCHITECTURE.md)
+#   docker compose up --build -d
+services:
+  muse:
+    build: .
+    # Plain ws:// on 8080. Put a TLS-terminating proxy or load balancer in front so browsers use wss://.
+    ports:
+      - "8080:8080"
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY in your shell}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-}
+      MAGIC_TICKET_SECRET: ${MAGIC_TICKET_SECRET:-}
+      SOLANA_RPC_URL: ${SOLANA_RPC_URL:-}
+      WALLET_MIN_LAMPORTS: ${WALLET_MIN_LAMPORTS:-1}
+    # Immutable root filesystem. Anything that tries to write lands in tmpfs (RAM)
+    # and disappears when the container stops.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    # No volumes anywhere: nothing can be mounted from, or written to, host disk.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Docker's default json-file driver would write container output to host disk.
+    # "none" keeps even the one-line upstream error counter out of any file.
+    logging:
+      driver: none
+    restart: unless-stopped

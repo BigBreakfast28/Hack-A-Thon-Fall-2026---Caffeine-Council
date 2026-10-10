@@ -137,7 +137,7 @@ function LessonsScreen({ go }: { go: (screen: Screen) => void }) {
   );
 }
 
-function CanvasScreen({ go }: { go: (screen: Screen) => void }) {
+function CanvasScreen({ go, addArtwork }: { go: (screen: Screen) => void; addArtwork: (art: Artwork) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [drawing, setDrawing] = useState(false);
   const [hasDrawn, setHasDrawn] = useState(false);
@@ -203,10 +203,7 @@ function CanvasScreen({ go }: { go: (screen: Screen) => void }) {
   };
   const saveArtwork = () => {
     const data = canvasRef.current?.toDataURL("image/png");
-    if (data) {
-      const old = JSON.parse(localStorage.getItem("sunny-artworks") || "[]");
-      localStorage.setItem("sunny-artworks", JSON.stringify([{ data, date: "Just now", title: "My cozy room" }, ...old].slice(0, 6)));
-    }
+    if (data) addArtwork({ data, date: "Just now", title: "My cozy room" });
     go("gallery");
   };
 
@@ -260,12 +257,8 @@ function CanvasScreen({ go }: { go: (screen: Screen) => void }) {
 
 type Artwork = { data: string; title: string; date: string };
 
-function GalleryScreen({ go }: { go: (screen: Screen) => void }) {
-  const [artworks, setArtworks] = useState<Artwork[]>(() => JSON.parse(localStorage.getItem("sunny-artworks") || "[]"));
-  const remove = (index: number) => {
-    const next = artworks.filter((_, i) => i !== index);
-    setArtworks(next); localStorage.setItem("sunny-artworks", JSON.stringify(next));
-  };
+function GalleryScreen({ go, artworks, onRemove, onWipe }: { go: (screen: Screen) => void; artworks: Artwork[]; onRemove: (index: number) => void; onWipe: () => void }) {
+  const remove = onRemove;
   const download = (art: Artwork) => {
     const link = document.createElement("a"); link.href = art.data; link.download = `${art.title}.png`; link.click();
   };
@@ -275,7 +268,7 @@ function GalleryScreen({ go }: { go: (screen: Screen) => void }) {
   return (
     <main className="screen gallery-screen">
       <nav className="nav-row"><SquishButton className="icon-button" onClick={() => go("home")} label="Home"><Icon name="home"/></SquishButton><span className="parent-badge"><Icon name="lock" size={17}/> GROWN-UPS</span><span/></nav>
-      <header className="gallery-header"><div><p className="eyebrow">THE DIGITAL FRIDGE</p><h1>Look what they made!</h1><p className="subhead">A little gallery of big ideas.</p></div><div className="storage-card"><span><strong>{artworks.length}</strong> of 12 spots used</span><div className="storage-track"><i style={{ width: `${Math.max(8, artworks.length / 12 * 100)}%` }}/></div><small>Saved safely on this iPad</small></div></header>
+      <header className="gallery-header"><div><p className="eyebrow">THE DIGITAL FRIDGE</p><h1>Look what they made!</h1><p className="subhead">A little gallery of big ideas.</p></div><div className="storage-card"><span><strong>{artworks.length}</strong> of 12 spots used</span><div className="storage-track"><i style={{ width: `${Math.max(8, artworks.length / 12 * 100)}%` }}/></div><small>Kept in memory only. Closing the app clears it.</small><button className="squish-button wipe-button" onClick={onWipe}>Wipe volatile memory</button></div></header>
       {artworks.length ? <section className="art-grid">{artworks.map((art, index) => <article className="art-card" key={`${art.title}-${index}`}><div className="art-image"><img src={art.data} alt={art.title}/><button className="delete-art" onClick={() => remove(index)} aria-label="Delete artwork"><Icon name="trash" size={20}/></button></div><div className="art-meta"><div><strong>{art.title}</strong><span>{art.date}</span></div><div className="art-actions"><SquishButton label="Download" onClick={() => download(art)}><Icon name="download" size={22}/></SquishButton><SquishButton label="Print" onClick={() => print(art)}><Icon name="print" size={22}/></SquishButton></div></div></article>)}</section> : <section className="empty-gallery"><div className="empty-doodle"><Icon name="sparkle" size={55}/></div><h2>Your fridge is ready</h2><p>Finish a drawing and save it here for everyone to admire.</p><SquishButton onClick={() => go("lessons")}>Make some art</SquishButton></section>}
     </main>
   );
@@ -283,5 +276,10 @@ function GalleryScreen({ go }: { go: (screen: Screen) => void }) {
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("home");
-  return screen === "home" ? <HomeScreen go={setScreen}/> : screen === "lessons" ? <LessonsScreen go={setScreen}/> : screen === "canvas" ? <CanvasScreen go={setScreen}/> : <GalleryScreen go={setScreen}/>;
+  // Artwork lives in RAM only. Closing the app or tapping "Wipe volatile memory" clears it.
+  const [artworks, setArtworks] = useState<Artwork[]>([]);
+  const addArtwork = (art: Artwork) => setArtworks((current) => [art, ...current].slice(0, 12));
+  const removeArtwork = (index: number) => setArtworks((current) => current.filter((_, i) => i !== index));
+  const wipeMemory = () => setArtworks([]);
+  return screen === "home" ? <HomeScreen go={setScreen}/> : screen === "lessons" ? <LessonsScreen go={setScreen}/> : screen === "canvas" ? <CanvasScreen go={setScreen} addArtwork={addArtwork}/> : <GalleryScreen go={setScreen} artworks={artworks} onRemove={removeArtwork} onWipe={wipeMemory}/>;
 }
