@@ -1,0 +1,10 @@
+{
+  "description": "Engages children in creative drawing with AI-guided art lessons, playful tools, and a parent-accessible gallery for saving and printing artwork.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
