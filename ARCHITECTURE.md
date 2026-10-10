@@ -23,11 +23,24 @@ Browser / iPad  --wss-->  TLS proxy  --ws-->  server/ (Node, RAM only)  --HTTPS-
 - `server/server.js`: WebSocket server on `/ws`, plus `GET /api/health`. Origin check, 1 MB message cap, 20 messages a minute per connection, one request at a time.
 - `server/mint-ticket.js`: prints a Magic Ticket from the server secret.
 - `server/Dockerfile`, `server/docker-compose.yml`: read-only root filesystem, RAM-only `/tmp`, no volumes, no container logs. Not yet built or run (Docker is not installed on the machine used to write this).
-- `src/hooks/useStatelessStream.ts`: client hook over WebSocket. History and credential live in React state. Not wired into a screen yet.
-- `src/lib/exportFrame.ts`: half-size, 70% JPEG snapshot flattened onto the paper color.
+- `src/hooks/useStatelessStream.ts`: client hook over WebSocket. History and credential live in React state. Used by the canvas and the Grown-ups screen in `src/App.tsx`.
+- `src/lib/exportFrame.ts`: half-size, 70% JPEG snapshot flattened onto the paper color (used only when `VITE_MUSE_SEND_FRAMES=1`).
+- `src/lib/canvasTelemetry.ts`: the drawing statistics the coach receives (see below).
 - `audit-compliance.sh`: zero-data tripwire (`npm run audit:zero-data`).
-- Tests: `cd server && npm test` (fake AI client, real WebSocket, real ed25519 keys).
+- Tests: `npm run test:server` (fake AI client, real WebSocket, real ed25519 keys) and `npm run test:client` (drawing statistics and the client-to-server wire contract).
 - The gallery no longer uses `localStorage`; saved art lives in memory with a "Wipe volatile memory" button. Fonts are self-hosted, so no request goes to Google Fonts.
+
+## How the canvas talks to the coach
+
+- While the child draws, `src/lib/canvasTelemetry.ts` keeps four numbers in a plain object (never in React state): `strokeCount`, `durationSeconds`, `shapeDiversityScore` and `primaryColors`. Stroke coordinates exist only until the stroke ends, then are classified and discarded.
+- `durationSeconds` is active drawing time: pauses longer than 5 seconds do not count, so a child who walks away does not trigger the "long session" module.
+- `shapeDiversityScore` is the normalized entropy of five stroke kinds (dot, line, loop, zigzag, curve), 0 until at least 5 strokes. `primaryColors` are the colors used in at least 10% of strokes. These are simple heuristics, not measurements of ability.
+- Sunny is asked in two ways: the sparkle button in the tool dock, and automatically after a 4 second pause once there have been at least 10 new strokes since the last check-in.
+- The reply appears as a dismissable note over the paper, so it is visible on any screen size, and Sunny's mood changes while she thinks.
+- By default only the four numbers leave the device. Setting `VITE_MUSE_SEND_FRAMES=1` also sends a small JPEG snapshot.
+- The ticket is entered by a grown-up on the Grown-ups screen, held in memory only, and cleared by "Wipe volatile memory". There is no screen for the wallet gate; that path needs a wallet adapter on the client.
+- If coaching is locked or the server is unreachable, the child sees a friendly line and keeps drawing. The raw error is never shown.
+- Checked so far: the tracker, the hook's message shape and the server's access gate are covered by tests, and the real server entry point was started and exercised over a WebSocket. The screens themselves have not yet been tried in a browser.
 
 ## Access verification (no accounts, nothing stored)
 
@@ -89,6 +102,10 @@ MAGIC_TICKET_SECRET=... node mint-ticket.js 24
 
 # front end
 npm install && VITE_MUSE_WS_URL=ws://localhost:8080/ws npm run dev
+# add VITE_MUSE_SEND_FRAMES=1 to also send a small snapshot (off by default: statistics only)
+
+# tests: server (35), client (12: drawing statistics and the wire contract)
+npm run test:server && npm run test:client
 
 # zero-data tripwire
 npm run audit:zero-data

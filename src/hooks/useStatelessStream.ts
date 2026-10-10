@@ -124,6 +124,7 @@ export const useStatelessStream = () => {
     pending,
     error,
     dispatchCanvasTelemetry,
+    hasCredential: credential !== null,
     setAccessCredential: setCredential,
     wipeVolatileMemory,
   };

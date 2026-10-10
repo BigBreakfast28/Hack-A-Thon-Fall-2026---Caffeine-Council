@@ -142,6 +142,13 @@ h1 { font-size: clamp(48px, 6.1vw, 82px); line-height: .92; letter-spacing: -.03
 .storage-track i { display: block; height: 100%; border-radius: inherit; background: #8eaf91; }
 .storage-card small { color: #74807c; font-weight: 700; }
 .wipe-button { margin-top: 12px; width: 100%; font-size: 14px; padding: 9px 14px; }
+.coach-toast { position: absolute; top: 14px; left: 14px; max-width: min(520px, calc(100% - 28px)); z-index: 3; display: flex; align-items: center; gap: 12px; padding: 10px 16px 10px 12px; border: 2px solid var(--ink); border-radius: 20px; background: var(--paper); box-shadow: 0 5px 0 rgba(48,60,57,.14); text-align: left; font-weight: 700; line-height: 1.4; cursor: pointer; }
+.coach-toast span { flex: 1; }
+.tool-group button:disabled { opacity: .35; cursor: not-allowed; }
+.coach-panel { max-width: 1160px; margin: 0 auto 32px; padding: 18px 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px; border: 2px solid var(--ink); border-radius: 22px; background: var(--paper); box-shadow: var(--shadow); }
+.coach-panel p { margin: 0; flex: 1 1 260px; color: #66716e; font-weight: 700; }
+.coach-panel input { flex: 1 1 220px; min-height: 44px; padding: 0 14px; border: 2px solid var(--ink); border-radius: 14px; background: #fff; font: inherit; }
+.coach-panel .squish-button { background: #f2d78d; }
 .art-grid { max-width: 1160px; margin: auto; display: grid; grid-template-columns: repeat(2, 1fr); align-items: start; gap: 24px; }
 .art-card { border: 2px solid var(--ink); border-radius: 26px; overflow: hidden; background: var(--paper); box-shadow: var(--shadow); }
 .art-card:nth-child(3n + 2) { transform: rotate(.5deg); }
