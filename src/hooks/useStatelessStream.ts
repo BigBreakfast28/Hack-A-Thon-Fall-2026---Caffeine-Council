@@ -119,13 +119,19 @@ export const useStatelessStream = () => {
     setError(null);
   }, [closeSocket]);
 
+  /** Setting or clearing the credential also clears any earlier access error, so it is not shown again. */
+  const setAccessCredential = useCallback((next: AccessCredential | null) => {
+    setCredential(next);
+    setError(null);
+  }, []);
+
   return {
     chatHistory,
     pending,
     error,
     dispatchCanvasTelemetry,
     hasCredential: credential !== null,
-    setAccessCredential: setCredential,
+    setAccessCredential,
     wipeVolatileMemory,
   };
 };

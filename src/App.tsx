@@ -20,6 +20,7 @@ const GALLERY_LIMIT = 12;
 // Sunny checks in on her own after a short pause, once there are enough new strokes.
 const AUTO_CHECKIN_PAUSE_MS = 4000;
 const AUTO_CHECKIN_STROKES = 10;
+const REPLY_VISIBLE_MS = 12000;
 // Off by default: only drawing statistics leave the device. Set VITE_MUSE_SEND_FRAMES=1 to also send a small snapshot.
 const SEND_FRAMES = import.meta.env.VITE_MUSE_SEND_FRAMES === "1";
 
@@ -245,9 +246,18 @@ function CanvasScreen({ go, lesson, addArtwork, coach }: { go: (screen: Screen) 
     }, AUTO_CHECKIN_PAUSE_MS);
   };
   useEffect(() => () => window.clearTimeout(idleTimer.current), []);
+  // Ignore an error left over from an earlier screen; only react to errors that happen while this canvas is open.
+  const seenError = useRef(coach.error);
   useEffect(() => {
-    if (coach.error) setReply(friendlyCoachError(coach.error));
+    if (coach.error && coach.error !== seenError.current) setReply(friendlyCoachError(coach.error));
+    seenError.current = coach.error;
   }, [coach.error]);
+  // Sunny's note never blocks drawing (it ignores touches) and fades after a while.
+  useEffect(() => {
+    if (!reply) return;
+    const timer = window.setTimeout(() => setReply(null), REPLY_VISIBLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [reply]);
   const saveArtwork = () => {
     const data = canvasRef.current?.toDataURL("image/png");
     if (data) {
@@ -296,7 +306,7 @@ function CanvasScreen({ go, lesson, addArtwork, coach }: { go: (screen: Screen) 
         <div className="paper-wrap">
           <canvas ref={canvasRef} onPointerDown={startDraw} onPointerMove={moveDraw} onPointerUp={endDraw} onPointerCancel={endDraw}/>
           {!hasDrawn && <div className="starter-dot"><span/><small>START HERE</small></div>}
-          {reply && !complete && <button className="coach-toast" onClick={() => setReply(null)} aria-live="polite"><Sun compact/><span>{reply}</span></button>}
+          {reply && !complete && <div className="coach-toast" role="status" aria-live="polite"><Sun compact/><span>{reply}</span></div>}
           {complete && <div className="complete-card"><Sun mood="celebrating" compact/><strong>Fridge-worthy!</strong><SquishButton onClick={saveArtwork}>Save to Fridge</SquishButton></div>}
         </div>
         {!complete && <div className="tool-dock">

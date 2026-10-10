@@ -36,11 +36,11 @@ Browser / iPad  --wss-->  TLS proxy  --ws-->  server/ (Node, RAM only)  --HTTPS-
 - `durationSeconds` is active drawing time: pauses longer than 5 seconds do not count, so a child who walks away does not trigger the "long session" module.
 - `shapeDiversityScore` is the normalized entropy of five stroke kinds (dot, line, loop, zigzag, curve), 0 until at least 5 strokes. `primaryColors` are the colors used in at least 10% of strokes. These are simple heuristics, not measurements of ability.
 - Sunny is asked in two ways: the sparkle button in the tool dock, and automatically after a 4 second pause once there have been at least 10 new strokes since the last check-in.
-- The reply appears as a dismissable note over the paper, so it is visible on any screen size, and Sunny's mood changes while she thinks.
+- The reply appears as a note over the paper that ignores touches (so it never blocks drawing) and fades after 12 seconds. It is visible on any screen size, and Sunny's mood changes while she thinks.
 - By default only the four numbers leave the device. Setting `VITE_MUSE_SEND_FRAMES=1` also sends a small JPEG snapshot.
 - The ticket is entered by a grown-up on the Grown-ups screen, held in memory only, and cleared by "Wipe volatile memory". There is no screen for the wallet gate; that path needs a wallet adapter on the client.
 - If coaching is locked or the server is unreachable, the child sees a friendly line and keeps drawing. The raw error is never shown.
-- Checked so far: the tracker, the hook's message shape and the server's access gate are covered by tests, and the real server entry point was started and exercised over a WebSocket. The screens themselves have not yet been tried in a browser.
+- Checked so far: the tracker, the hook's message shape and the server's access gate are covered by tests. The real server was started and used over a WebSocket, and the canvas was driven in Chrome with an iPad Pro viewport and touch input: locked message, ticket entry, automatic check-in, reply at portrait width, wipe, no browser storage, no third-party requests, no snapshot sent. The server used a labelled mock model, not Gemini, in that run. See "Testing for iOS" for what that does not prove.
 
 ## Access verification (no accounts, nothing stored)
 
@@ -89,6 +89,15 @@ These are wording and claims, not bugs, so they are left for the owner to decide
 - Web or native: this repo is a Vite web app with a 2D canvas. Moving to React Native with Skia and Reanimated would be a rewrite.
 - Hosting: Vultr Cloud Compute or Kubernetes (VKE) running the container behind a TLS proxy. No Vultr "serverless edge" product has been verified.
 - Under-18 positioning: see above.
+
+## Testing for iOS
+
+The target is iOS. So far the screens have been walked through only in desktop Chrome set up as an iPad Pro (iPad viewport, real touch input, iPad user agent). That is Chrome's engine, not Safari's, so it does not prove the app works on iOS.
+
+- The iOS Simulator is not installed on the machine used so far (only the Command Line Tools are). Installing Xcode gives Mobile Safari in a simulator, which is the next test. A real iPad is better still.
+- Safari points to check: finger and Apple Pencil drawing on the canvas, the color picker, the sparkle button and the ticket field, and what happens when the app goes to the background (the WebSocket closes; the hook reconnects on the next request).
+- A page served over HTTPS must use `wss://`; Safari blocks `ws://` from an HTTPS page.
+- If the product ships as a native iOS app instead of a web page, the StoreKit gate, Skia and Reanimated apply and this web canvas is the prototype. That decision is still open.
 
 ## Run
 
