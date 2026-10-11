@@ -14,6 +14,7 @@ services:
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-}
       MAGIC_TICKET_SECRET: ${MAGIC_TICKET_SECRET:-}
+      HISTORY_SECRET: ${HISTORY_SECRET:-}
       SOLANA_RPC_URL: ${SOLANA_RPC_URL:-}
       WALLET_MIN_LAMPORTS: ${WALLET_MIN_LAMPORTS:-1}
     # Immutable root filesystem. Anything that tries to write lands in tmpfs (RAM)

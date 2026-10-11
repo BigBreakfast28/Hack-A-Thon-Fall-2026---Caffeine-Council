@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { GoogleGenAI } from "@google/genai";
 import { WebSocketServer } from "ws";
 import { createAccessVerifier, createSolanaBalanceFetcher } from "./access.js";
+import { createHistoryProofs } from "./historyProof.js";
 import { processMuse } from "./muse.js";
 
 const MAX_PAYLOAD_BYTES = 1_000_000;
@@ -17,6 +18,9 @@ export function createServer({
   verifyAccess,
   model = process.env.GEMINI_MODEL ?? "gemini-3.8-flash",
   allowedOrigin = process.env.ALLOWED_ORIGIN,
+  // One signer for the whole server. HISTORY_SECRET keeps histories valid across restarts;
+  // without it a random secret is made now and old histories are refused after a restart.
+  historyProofs = createHistoryProofs(),
 }) {
   const server = http.createServer((req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -72,8 +76,8 @@ export function createServer({
         } catch {
           return reply({ error: "Bad request" });
         }
-        const { status, body } = await processMuse(payload, { ai, model, verifyAccess });
-        return reply(status === 200 ? body : { error: body.error });
+        const { status, body } = await processMuse(payload, { ai, model, verifyAccess, historyProofs });
+        return reply(status === 200 ? body : { error: body.error, ...(body.resetHistory ? { resetHistory: true } : {}) });
       } catch {
         return reply({ error: "Transformation error." });
       } finally {

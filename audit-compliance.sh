@@ -41,6 +41,28 @@ else
     echo "✅ SUCCESS: Container has no volumes and a read-only root filesystem."
 fi
 
+# Vultr kit: the Muse service keeps the same promises as the local compose file. Only the
+# Caddy service may have a volume (TLS certificates), and Caddy must not log requests to a file.
+VULTR_COMPOSE=deploy/vultr/docker-compose.yml
+if [ -f "$VULTR_COMPOSE" ]; then
+    MUSE_BLOCK=$(awk '/^  muse:/{f=1; next} /^  [A-Za-z0-9_-]+:/{f=0} /^[A-Za-z]/{f=0} f' "$VULTR_COMPOSE")
+    if echo "$MUSE_BLOCK" | grep -E '^[[:space:]]*volumes:' >/dev/null; then
+        echo "❌ CRITICAL COMPLIANCE FAILURE: the muse service in $VULTR_COMPOSE declares volumes."
+        FAIL_AUDIT=1
+    elif ! echo "$MUSE_BLOCK" | grep -E '^[[:space:]]*read_only:[[:space:]]*true' >/dev/null; then
+        echo "❌ CRITICAL COMPLIANCE FAILURE: the muse service in $VULTR_COMPOSE is not read_only."
+        FAIL_AUDIT=1
+    elif ! echo "$MUSE_BLOCK" | grep -E '^[[:space:]]*driver:[[:space:]]*none' >/dev/null; then
+        echo "❌ CRITICAL COMPLIANCE FAILURE: the muse service in $VULTR_COMPOSE does not turn off Docker logging."
+        FAIL_AUDIT=1
+    elif grep -nE '^[[:space:]]*output[[:space:]]+file' deploy/vultr/Caddyfile >/dev/null 2>&1; then
+        echo "❌ CRITICAL COMPLIANCE FAILURE: deploy/vultr/Caddyfile writes a log file."
+        FAIL_AUDIT=1
+    else
+        echo "✅ SUCCESS: Vultr kit: muse has no volumes, is read-only, has logging off; proxy writes no log file."
+    fi
+fi
+
 # Secrets must never be committed.
 if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     TRACKED_ENV=$(git ls-files | grep -E '(^|/)\.env($|\.)' | grep -vE '\.example$')

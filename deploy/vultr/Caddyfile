@@ -1,0 +1,34 @@
+# Caddy terminates TLS and forwards to the Node server over the private compose network.
+# UNTESTED: this file has not been run. Validate it first with:
+#   docker compose run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile
+# (compose reads the whole file, so export the variables from docker-compose.yml first)
+#
+# {$MUSE_DOMAIN} is read from the environment (see docker-compose.yml). Caddy gets and
+# renews the certificate by itself once the domain points at this server and ports 80 and
+# 443 are open.
+{
+	# Nothing needs the admin API on a locked-down box.
+	admin off
+}
+
+{$MUSE_DOMAIN} {
+	# Access logs are off unless a `log` block enables them. This one sends them nowhere,
+	# on purpose and visibly, so a reviewer can see the intent. Do not point it at a file.
+	log {
+		output discard
+	}
+
+	# The browser connects here. Caddy upgrades and proxies WebSockets without extra setup.
+	handle /ws {
+		reverse_proxy muse:8080
+	}
+
+	handle /api/health {
+		reverse_proxy muse:8080
+	}
+
+	# Everything else is not ours.
+	handle {
+		respond "Not found" 404
+	}
+}

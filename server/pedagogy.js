@@ -9,7 +9,10 @@
 //  - `studies`, `evidence` and `caveat` are for the team and judges. They are never sent
 //    to the model or shown to a child.
 //  - `coaching_goals` replaces `target_mobility_skills`: the app coaches toward these
-//    goals, it does not measure them.
+//    goals, it does not measure them. Where a goal matches a standard divergent-thinking
+//    measure (fluency, elaboration, originality) it uses that word, so a pilot can score
+//    against it. Flexibility is deliberately not a goal: the 2025 early-childhood
+//    meta-analysis found no effect on it.
 //  - `general_encouragement` is deliberately plain. It is the default and also the
 //    control condition for any evaluation of the other modules.
 export const pedagogyData = {
@@ -20,7 +23,7 @@ export const pedagogyData = {
       "Haught-Tromp (2017)",
       "Acar, Tarakci & van Knippenberg (2019)"
     ],
-    coaching_goals: ["Getting started on an open page", "Trying a new way of making marks"],
+    coaching_goals: ["Getting started on an open page", "Originality: a new way of making marks"],
     evidence:
       "Experiments and case studies show that limits placed on the task can raise originality, and that an open blank page is hard to start. Moderate constraints work best.",
     caveat:
@@ -57,6 +60,25 @@ export const pedagogyData = {
     prompts_for_kids:
       "Help the child decide what they want to figure out or change in this drawing. Ask what they would like to try next or what they wonder about, and give one example question such as 'What could happen next in this picture?'. Do not choose the problem for them. If they have not decided, offer two options and let them pick."
   },
+  elaboration: {
+    framework: "Elaboration: building on what is already there",
+    studies: [
+      "Torrance (1966)",
+      "Burns et al. (2025)",
+      "Vygotsky (1930; English 2004)"
+    ],
+    coaching_goals: [
+      "Elaboration: adding detail and new parts",
+      "Fluency: more than one idea for the same picture",
+      "Imagination: a story for the picture"
+    ],
+    evidence:
+      "Elaboration, adding detail to an idea, is one of the four standard divergent-thinking measures, with fluency, flexibility and originality. A 2025 meta-analysis of creativity training for ages 0 to 6 found gains in elaboration, fluency, originality and imagination, from structured programs that included drawing. Vygotsky argued that imagination combines elements of past experience, so more to build on gives more to combine.",
+    caveat:
+      "The 2025 programs were structured and mostly small-group with a teacher, and they found no effect for flexibility, so an app is a different delivery and flexibility is not claimed. The Vygotsky point is theory, not a test of this coach. Never imply that a picture is incomplete.",
+    prompts_for_kids:
+      "Help the child build on their own picture. Ask what else could be in this picture's world or what could happen next, and give one example question such as 'What might live in the empty spaces?' or 'What could this part turn into?'. Do not decide what they add and do not describe a finished picture for them. If there are already many marks, invite one more detail on a part they choose. If the page is nearly empty, invite them to start with one thing and then add a neighbor to it. Offer two directions and let them pick, or let them pick their own. They can say no or keep the picture just as it is. Never say the picture needs more or is unfinished."
+  },
   autonomy_support: {
     framework: "Autonomy-supportive, non-evaluative coaching",
     studies: [
@@ -71,6 +93,21 @@ export const pedagogyData = {
       "Experiments are largely with adults and older students; applying them to young children is an inference.",
     prompts_for_kids:
       "Keep it calm and very short. Do not judge or rate the drawing and do not compare it with anything. Remind the child it is their picture and they decide what happens next; you may say 'You are the boss of this canvas.' Offer a choice between two next steps, or no next step at all."
+  },
+  rule_playing: {
+    framework: "Playing with the child's own rule",
+    studies: [
+      "Stokes (2005, 2007, 2008)",
+      "Acar, Tarakci & van Knippenberg (2019)",
+      "Zhan, He & Zhong (2024)"
+    ],
+    coaching_goals: ["Inventing their own way to draw", "Trying a rule and changing it"],
+    evidence:
+      "Limits that a person chooses to set for a task can raise originality, and problems that learners find themselves are the most conducive to creativity. Here the child picks the limit.",
+    caveat:
+      "The evidence for chosen limits is mostly from adults, and the child chooses from a fixed menu, so this is a small version of rule-making. Whether it helps children is untested.",
+    prompts_for_kids:
+      "The child made their own drawing rule, given below. Cheer that they chose a rule, not that they are clever. Suggest one playful way to try the rule in the picture they are making. They can change or drop the rule at any time, so say so. Never add a second rule, never make the rule harder, and never present it as a test."
   },
   general_encouragement: {
     framework: "General encouragement (default and control condition)",

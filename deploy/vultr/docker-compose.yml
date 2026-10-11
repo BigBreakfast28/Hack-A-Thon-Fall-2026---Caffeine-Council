@@ -1,0 +1,76 @@
+# Muse on a Vultr VM: Caddy (TLS) in front of the Node server.
+# Dry-run once on a Vultr VM with a placeholder Gemini key, before the thinkingLevel change.
+# See README.md for the runbook and for what was and was not checked.
+#
+# Secrets come from your shell at launch, never from a file:
+#   read -rs GEMINI_API_KEY && export GEMINI_API_KEY
+#   export MUSE_DOMAIN=muse.example.com ALLOWED_ORIGIN=https://your-front-end.example.com
+#   docker compose up --build -d
+services:
+  muse:
+    build: ../../server
+    # Reachable only by Caddy over the compose network. Not published on the host.
+    expose:
+      - "8080"
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY in your shell}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
+      # Required here, unlike the local compose file: without it any web page could open a socket.
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:?set ALLOWED_ORIGIN to the exact origin of the front end}
+      MAGIC_TICKET_SECRET: ${MAGIC_TICKET_SECRET:-}
+      # Signs the chat history. If unset, a random one is made at start and chats restart after a deploy.
+      HISTORY_SECRET: ${HISTORY_SECRET:-}
+      SOLANA_RPC_URL: ${SOLANA_RPC_URL:-}
+      WALLET_MIN_LAMPORTS: ${WALLET_MIN_LAMPORTS:-1}
+    # Immutable root filesystem; writes land in RAM and vanish when the container stops.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    # This service has no volumes at all. The audit script checks that.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Docker's default driver would write container output to the host disk.
+    logging:
+      driver: none
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80" # certificate issuance and the redirect to https
+      - "443:443"
+      - "443:443/udp" # HTTP/3; harmless to leave out
+    environment:
+      MUSE_DOMAIN: ${MUSE_DOMAIN:?set MUSE_DOMAIN, e.g. muse.example.com}
+    volumes:
+      # Read-only config file from this folder. Contains no user data.
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # The one persistent thing in this stack: Caddy's TLS certificates and account key.
+      # It holds no user data. Without it, Caddy asks for a new certificate on every
+      # restart and will hit Let's Encrypt rate limits.
+      - caddy_certs:/data
+    read_only: true
+    tmpfs:
+      - /config # Caddy writes an autosaved copy of its config here; RAM only
+      - /tmp
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE # lets a non-root process bind ports 80 and 443
+    security_opt:
+      - no-new-privileges:true
+    # Off by default so no client IP is written to disk. If certificates will not issue and you
+    # need Caddy's own messages, run once with CADDY_LOG_DRIVER=json-file, read them, then unset
+    # it and recreate the container.
+    logging:
+      driver: ${CADDY_LOG_DRIVER:-none}
+    depends_on:
+      - muse
+    restart: unless-stopped
+
+volumes:
+  caddy_certs:
