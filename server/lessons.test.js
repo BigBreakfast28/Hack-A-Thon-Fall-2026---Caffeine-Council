@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cleanLesson, cleanShape, createLessonService, stepPicture } from "./lessons.js";
+import { LESSON_CATALOG, cleanLesson, cleanShape, createLessonService, stepPicture } from "./lessons.js";
+import { SAFETY_SETTINGS, THINKING_LEVEL } from "./muse.js";
 import { createServer } from "./server.js";
 
 const trainLesson = {
@@ -98,9 +99,126 @@ test("an unusable answer is retried once, then reported so the app uses its own 
   const getLesson = createLessonService({ ai: broken, model: "m" });
   assert.equal((await getLesson("little-train")).status, 502);
   assert.equal(broken.calls.length, 2);
-  // A failure is not cached: the next request tries again.
+  // A failure is not remembered as a lesson, but it is not asked for again straight away
+  // either (see the cool-down test below).
   await getLesson("little-train");
-  assert.equal(broken.calls.length, 4);
+  assert.equal(broken.calls.length, 2);
+});
+
+test("Gemini gets the same strict filters and short thinking as Sunny's replies", async () => {
+  const ai = fakeAi(trainLesson);
+  await createLessonService({ ai, model: "m" })("little-train");
+  const [call] = ai.calls;
+  assert.deepEqual(call.config.safetySettings, SAFETY_SETTINGS);
+  assert.equal(call.config.thinkingConfig.thinkingLevel, THINKING_LEVEL);
+  assert.equal("maxOutputTokens" in call.config, false);
+  // The config is a copy, so one request cannot change the shared list for the next.
+  call.config.safetySettings[0].threshold = "BLOCK_NONE";
+  assert.equal(SAFETY_SETTINGS[0].threshold, "BLOCK_LOW_AND_ABOVE");
+});
+
+test("a failed lesson is not asked for again during the cool-down, then it is, and a success clears it", async () => {
+  let t = 1_000_000;
+  let good = false;
+  const calls = [];
+  const ai = {
+    models: {
+      generateContent: async (args) => {
+        calls.push(args);
+        return { text: good ? JSON.stringify(trainLesson) : "not json" };
+      },
+    },
+  };
+  const getLesson = createLessonService({ ai, model: "m", now: () => t, cooldownMs: 60_000 });
+
+  assert.equal((await getLesson("little-train")).status, 502);
+  assert.equal(calls.length, 2); // first answer and the one retry
+  // Hammering a failing lesson costs nothing.
+  for (let i = 0; i < 20; i++) assert.equal((await getLesson("little-train")).status, 502);
+  assert.equal(calls.length, 2);
+  t += 59_999;
+  assert.equal((await getLesson("little-train")).status, 502);
+  assert.equal(calls.length, 2);
+  // Another lesson is not held back by this one's failure.
+  await getLesson("cozy-room");
+  assert.equal(calls.length, 4);
+
+  t += 2; // the cool-down is over, so it is tried again (and fails again, restarting the cool-down)
+  assert.equal((await getLesson("little-train")).status, 502);
+  assert.equal(calls.length, 6);
+  assert.equal((await getLesson("little-train")).status, 502);
+  assert.equal(calls.length, 6);
+
+  good = true;
+  t += 60_001;
+  assert.equal((await getLesson("little-train")).status, 200);
+  const afterSuccess = calls.length;
+  assert.equal((await getLesson("little-train")).status, 200);
+  assert.equal(calls.length, afterSuccess); // served from memory
+});
+
+test("warm-up makes every catalog lesson ready, one at a time, so later requests cost nothing", async () => {
+  let running = 0;
+  let peak = 0;
+  const calls = [];
+  const ai = {
+    models: {
+      generateContent: async (args) => {
+        calls.push(args);
+        running += 1;
+        peak = Math.max(peak, running);
+        await new Promise((resolve) => setTimeout(resolve, 2));
+        running -= 1;
+        return { text: JSON.stringify(trainLesson) };
+      },
+    },
+  };
+  const getLesson = createLessonService({ ai, model: "m" });
+  const total = Object.keys(LESSON_CATALOG).length;
+  assert.equal(await getLesson.warm(), total);
+  assert.equal(peak, 1, "gentle on the API: never two at once");
+  assert.equal(calls.length, total);
+  for (const id of Object.keys(LESSON_CATALOG)) assert.equal((await getLesson(id)).status, 200);
+  assert.equal(calls.length, total);
+  // Warming again does nothing.
+  assert.equal(await getLesson.warm(), total);
+  assert.equal(calls.length, total);
+});
+
+test("warm-up never throws, and a lesson that failed in warm-up is not retried straight away", async () => {
+  const ai = fakeAi("not json");
+  const getLesson = createLessonService({ ai, model: "m" });
+  const total = Object.keys(LESSON_CATALOG).length;
+  assert.equal(await getLesson.warm(), 0);
+  assert.equal(ai.calls.length, total * 2);
+  assert.equal(await getLesson.warm(), 0);
+  assert.equal(ai.calls.length, total * 2);
+
+  const throwing = { models: { generateContent: async () => { throw new Error("boom"); } } };
+  assert.equal(await createLessonService({ ai: throwing, model: "m" }).warm(), 0);
+});
+
+test("browsers may keep a finished lesson for a few minutes; errors are never kept; warm-up is exposed", async () => {
+  const { server, warmLessons } = createServer({
+    ai: fakeAi(trainLesson),
+    model: "m",
+    verifyAccess: async () => ({ ok: true }),
+    allowedOrigin: "https://app.example",
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const ok = await fetch(`${base}/api/lessons/little-train`);
+    assert.equal(ok.status, 200);
+    assert.equal(ok.headers.get("cache-control"), "public, max-age=300");
+    const missing = await fetch(`${base}/api/lessons/nope`);
+    assert.equal(missing.status, 404);
+    assert.equal(missing.headers.get("cache-control"), "no-store");
+    assert.equal((await fetch(`${base}/api/health`)).headers.get("cache-control"), "no-store");
+    assert.equal(await warmLessons(), Object.keys(LESSON_CATALOG).length);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test("Gemini is asked for JSON and told the lesson and style", async () => {

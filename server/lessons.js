@@ -8,6 +8,9 @@
 // Only lesson ids from LESSON_CATALOG are accepted, so callers cannot write the prompt, and
 // each lesson is generated once and kept in memory until the process restarts. Every word
 // of the lesson also passes the same child-safety check as Sunny's replies (safety.js).
+// The server warms every lesson in the background at start-up (server.js), so a child
+// opening a lesson normally gets it instantly.
+import { SAFETY_SETTINGS, THINKING_LEVEL } from "./muse.js";
 import { anyUnsafe } from "./safety.js";
 
 export const LESSON_CATALOG = {
@@ -33,6 +36,7 @@ const MAX_STEPS = 6;
 const MAX_SHAPES_PER_STEP = 8;
 const MAX_PATH_CHARS = 400;
 const UPSTREAM_TIMEOUT_MS = 25_000;
+const FAILURE_COOLDOWN_MS = 60_000;
 
 const LESSON_RULES = [
   "You plan step-by-step drawing lessons for children aged 5 and up.",
@@ -175,7 +179,14 @@ async function generateLesson(id, { ai, model }) {
       ai.models.generateContent({
         model,
         contents: [{ role: "user", parts: [{ text: `Lesson: ${title}.\nStyle: ${STYLE_HINTS[style]}${extra}` }] }],
-        config: { systemInstruction: LESSON_RULES, responseMimeType: "application/json", temperature: 0.4 },
+        // Same strict Google filters and short thinking as Sunny's replies (see muse.js).
+        config: {
+          systemInstruction: LESSON_RULES,
+          safetySettings: SAFETY_SETTINGS.map((setting) => ({ ...setting })),
+          thinkingConfig: { thinkingLevel: THINKING_LEVEL },
+          responseMimeType: "application/json",
+          temperature: 0.4,
+        },
       }),
       UPSTREAM_TIMEOUT_MS,
     );
@@ -195,21 +206,38 @@ async function generateLesson(id, { ai, model }) {
   throw new Error("unusable lesson");
 }
 
-/** Builds the lesson service: one Gemini call per lesson id, shared by concurrent callers. */
-export function createLessonService({ ai, model }) {
+/**
+ * Builds the lesson service: one Gemini call per lesson id, shared by concurrent callers.
+ *
+ * A lesson that fails is not asked for again for `cooldownMs`. Without that, anyone could
+ * keep requesting a failing lesson and make us pay for two Gemini calls each time.
+ * `getLesson.warm()` generates every catalog lesson in the background, one at a time, so a
+ * child opening a lesson almost never waits for Gemini. `now` is injectable for tests.
+ */
+export function createLessonService({ ai, model, now = Date.now, cooldownMs = FAILURE_COOLDOWN_MS }) {
   const ready = new Map(); // id -> steps
   const pending = new Map(); // id -> Promise<steps>
+  const failedAt = new Map(); // id -> time of the last failure
 
-  return async function getLesson(id) {
+  async function getLesson(id) {
     if (!Object.hasOwn(LESSON_CATALOG, id)) return { status: 404, body: { error: "Unknown lesson" } };
     if (ready.has(id)) return { status: 200, body: { steps: ready.get(id) } };
+    const lastFailure = failedAt.get(id);
+    if (lastFailure !== undefined && now() - lastFailure < cooldownMs) {
+      return { status: 502, body: { error: "Lesson not available right now." } };
+    }
     if (!pending.has(id)) {
       pending.set(
         id,
         generateLesson(id, { ai, model })
           .then((steps) => {
             ready.set(id, steps);
+            failedAt.delete(id);
             return steps;
+          })
+          .catch((err) => {
+            failedAt.set(id, now());
+            throw err;
           })
           .finally(() => pending.delete(id)),
       );
@@ -220,5 +248,13 @@ export function createLessonService({ ai, model }) {
       // The app falls back to its built-in steps on any non-200 answer.
       return { status: 502, body: { error: "Lesson not available right now." } };
     }
+  }
+
+  /** Generates every lesson not yet ready, one after another. Never throws. Returns how many are ready. */
+  getLesson.warm = async () => {
+    for (const id of Object.keys(LESSON_CATALOG)) await getLesson(id);
+    return ready.size;
   };
+
+  return getLesson;
 }

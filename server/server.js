@@ -13,6 +13,7 @@ import { createLessonService } from "./lessons.js";
 const MAX_PAYLOAD_BYTES = 1_000_000;
 const MAX_CONNECTIONS = 50;
 const MESSAGES_PER_MINUTE = 20;
+const LESSON_CACHE_SECONDS = 300;
 
 export function createServer({
   ai,
@@ -40,6 +41,9 @@ export function createServer({
       res.writeHead(status, {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": allowedOrigin || "*",
+        // A finished lesson is the same for everyone, so the browser may keep it for a few
+        // minutes and reopen it instantly. Errors are never kept.
+        "Cache-Control": status === 200 ? `public, max-age=${LESSON_CACHE_SECONDS}` : "no-store",
       });
       res.end(JSON.stringify(body));
       return;
@@ -101,7 +105,17 @@ export function createServer({
     });
   });
 
-  return { server, wss };
+  // Never rejects (it runs unattended at start-up): a lesson that cannot be made is simply
+  // left for the app's built-in steps.
+  const warmLessons = async () => {
+    try {
+      return typeof getLesson.warm === "function" ? await getLesson.warm() : 0;
+    } catch {
+      return 0;
+    }
+  };
+
+  return { server, wss, warmLessons };
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
@@ -124,7 +138,11 @@ if (isMain) {
   });
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
   const port = Number(process.env.PORT ?? 8080);
-  createServer({ ai, verifyAccess }).server.listen(port, "0.0.0.0", () => {
+  const app = createServer({ ai, verifyAccess });
+  app.server.listen(port, "0.0.0.0", () => {
     console.log(`muse server listening on ${port}`);
+    // Generate the lessons now, in the background, so the first child does not wait for Gemini.
+    // This costs one Gemini call per lesson at every start. LESSON_PREWARM=off turns it off.
+    if (process.env.LESSON_PREWARM !== "off") void app.warmLessons();
   });
 }
