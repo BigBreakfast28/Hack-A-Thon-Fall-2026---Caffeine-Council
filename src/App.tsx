@@ -13,6 +13,7 @@ import {
 import { useStatelessStream } from "./hooks/useStatelessStream";
 import { exportFrame } from "./lib/exportFrame";
 import { createStrokeTracker } from "./lib/canvasTelemetry";
+import { createCheckInScheduler } from "./lib/checkInScheduler";
 
 type Screen = "home" | "lessons" | "canvas" | "gallery";
 
@@ -153,8 +154,16 @@ function CanvasScreen({ go, lesson, addArtwork, coach }: { go: (screen: Screen) 
   const [tracker] = useState(createStrokeTracker);
   const coachRef = useRef<Coach>(coach);
   const askRef = useRef<() => Promise<void>>(async () => {});
-  const sentStrokes = useRef(0);
-  const idleTimer = useRef<number | undefined>(undefined);
+  // Decides when Sunny checks in on her own: after a pause, once there are enough new strokes.
+  const [checkIn] = useState(() =>
+    createCheckInScheduler({
+      pauseMs: AUTO_CHECKIN_PAUSE_MS,
+      minNewStrokes: AUTO_CHECKIN_STROKES,
+      strokeCount: () => tracker.strokeCount(),
+      isPending: () => coachRef.current.pending,
+      ask: () => askRef.current(),
+    }),
+  );
 
   // Load this lesson's steps (from the server if connected, otherwise starter steps).
   useEffect(() => {
@@ -207,6 +216,7 @@ function CanvasScreen({ go, lesson, addArtwork, coach }: { go: (screen: Screen) 
     if (!ctx) return;
     ctx.beginPath(); ctx.moveTo(p.x, p.y);
     tracker.beginStroke(p.x, p.y, color, performance.now());
+    checkIn.strokeStarted(); // the child is drawing, so they have not paused
     setDrawing(true); setHasDrawn(true);
   };
   const moveDraw = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -224,14 +234,14 @@ function CanvasScreen({ go, lesson, addArtwork, coach }: { go: (screen: Screen) 
     const canvas = canvasRef.current;
     canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
     setHasDrawn(false); setComplete(false); setStep(1);
-    tracker.reset(); sentStrokes.current = 0; setReply(null); window.clearTimeout(idleTimer.current);
+    tracker.reset(); checkIn.reset(); setReply(null);
   };
   // Sunny the coach. Only drawing statistics go to the server (plus a small snapshot if VITE_MUSE_SEND_FRAMES=1).
   coachRef.current = coach;
   const askSunny = async () => {
     const snapshot = tracker.snapshot();
     if (!snapshot || coachRef.current.pending) return;
-    sentStrokes.current = snapshot.strokeCount;
+    checkIn.markSent(snapshot.strokeCount);
     const frame = SEND_FRAMES && canvasRef.current ? exportFrame(canvasRef.current) : undefined;
     const text = await coachRef.current.dispatchCanvasTelemetry(snapshot, frame);
     if (text) setReply(text);
@@ -240,13 +250,10 @@ function CanvasScreen({ go, lesson, addArtwork, coach }: { go: (screen: Screen) 
   const endDraw = () => {
     tracker.endStroke(performance.now());
     setDrawing(false);
-    window.clearTimeout(idleTimer.current);
     // After a short pause, Sunny checks in on her own once there has been enough new drawing.
-    idleTimer.current = window.setTimeout(() => {
-      if (tracker.strokeCount() - sentStrokes.current >= AUTO_CHECKIN_STROKES) void askRef.current();
-    }, AUTO_CHECKIN_PAUSE_MS);
+    checkIn.strokeEnded();
   };
-  useEffect(() => () => window.clearTimeout(idleTimer.current), []);
+  useEffect(() => () => checkIn.stop(), [checkIn]);
   // Ignore an error left over from an earlier screen; only react to errors that happen while this canvas is open.
   const seenError = useRef(coach.error);
   useEffect(() => {
