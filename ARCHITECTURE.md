@@ -27,8 +27,8 @@ Browser / iPad  --wss-->  TLS proxy  --ws-->  server/ (Node, RAM only)  --HTTPS-
 - `src/lib/exportFrame.ts`: half-size, 70% JPEG snapshot flattened onto the paper color (used only when `VITE_MUSE_SEND_FRAMES=1`).
 - `src/lib/canvasTelemetry.ts`: the drawing statistics the coach receives (see below).
 - `RESEARCH.md`: the evidence behind each module with its caveats, the old-to-new module mapping, the pilot evaluation plan and the sources to drop or verify.
-- `audit-compliance.sh`: zero-data tripwire (`npm run audit:zero-data`).
-- Tests: `npm run test:server` (fake AI client, real WebSocket, real ed25519 keys) and `npm run test:client` (drawing statistics and the client-to-server wire contract).
+- `audit-compliance.sh`: zero-data tripwire (`pnpm run audit:zero-data`).
+- Tests: `pnpm run test:server` (fake AI client, real WebSocket, real ed25519 keys) and `pnpm run test:client` (drawing statistics and the client-to-server wire contract).
 - The gallery no longer uses `localStorage`; saved art lives in memory with a "Wipe volatile memory" button. Fonts are self-hosted, so no request goes to Google Fonts.
 
 ## How the canvas talks to the coach
@@ -115,13 +115,17 @@ GEMINI_API_KEY=... npm run dev            # local only: access checks off
 # mint a ticket for the real gate
 MAGIC_TICKET_SECRET=... node mint-ticket.js 24
 
-# front end
-npm install && VITE_MUSE_WS_URL=ws://localhost:8080/ws npm run dev
+# front end: the root uses pnpm (version pinned in .mise.toml, one lockfile: pnpm-lock.yaml).
+# server/ is a separate npm package with its own package-lock.json.
+pnpm install --frozen-lockfile && VITE_MUSE_WS_URL=ws://localhost:8080/ws pnpm dev
 # add VITE_MUSE_SEND_FRAMES=1 to also send a small snapshot (off by default: statistics only)
 
 # tests: server (42), client (13: drawing statistics and the wire contract)
-npm run test:server && npm run test:client
+# the client tests import server code, so install the server's packages first: (cd server && npm ci)
+pnpm run test:server && pnpm run test:client
 
 # zero-data tripwire
-npm run audit:zero-data
+pnpm run audit:zero-data
 ```
+
+Do not run `npm install` at the root: it would recreate `package-lock.json` next to `pnpm-lock.yaml`.
