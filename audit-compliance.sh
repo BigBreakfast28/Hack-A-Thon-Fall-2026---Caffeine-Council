@@ -1,10 +1,13 @@
 #!/bin/sh
 # audit-compliance.sh - Owned by Shubhang
 #
-# A tripwire, not a proof. It greps the source for storage, tracking, logging and
-# disk-writing code and for container settings that would persist data. A clean run
-# means "none of these known patterns appear", not "this app is compliant". It cannot
-# see what a dependency does, what a host provider logs, or what the law requires.
+# A tripwire, not a proof. It greps the source, and the page shell (HTML entry, public
+# folder, vite.config.ts, the site config and package.json), for storage, tracking, logging
+# and disk-writing code and for container settings that would persist data. A clean run
+# means "none of these known patterns appear", not "this app is compliant". It can see the
+# names of dependencies but not what a dependency does, and it cannot see what a host
+# provider logs or what the law requires. A plugin that phones home without a URL in the
+# config, or a tracker with an innocent package name, would pass.
 #
 # Run from anywhere:  sh audit-compliance.sh     (exit code 1 on any finding)
 cd "$(dirname "$0")" || exit 2
@@ -28,6 +31,50 @@ if [ -n "$FORBIDDEN_HOOKS" ]; then
     FAIL_AUDIT=1
 else
     echo "✅ SUCCESS: Zero persistent disk storage or tracking scripts detected."
+fi
+
+# Page shell and build config. The check above reads only ./src and ./server, but a tracker can
+# also arrive through the HTML entry, the public folder, the site config or a dependency.
+# vite.config.ts legitimately holds the code that adds Google Analytics when
+# .figma/make/site.json asks for it, so that file is checked for unexpected hosts, and the
+# switch itself is checked in site.json. Hosts are written with [.] so the same text works in
+# grep and in both macOS and GNU awk.
+ALLOWED_HOSTS='www[.]w3[.]org|vitejs[.]dev|www[.]googletagmanager[.]com'
+SHELL_FILES="vite.config.ts"
+for page in *.html; do [ -f "$page" ] && SHELL_FILES="$SHELL_FILES $page"; done
+if [ -d public ]; then SHELL_FILES="$SHELL_FILES $(find public -type f | tr '\n' ' ')"; fi
+
+# Any http(s) host that is not on the short allow-list, outside comment lines.
+EXTERNAL_HOSTS=$(grep -nHE "https?://" $SHELL_FILES 2>/dev/null | awk -v allow="^https?://($ALLOWED_HOSTS)\$" '
+  {
+    match($0, /^[^:]+:[0-9]+:/)
+    loc = substr($0, 1, RLENGTH)
+    text = substr($0, RLENGTH + 1)
+    if (text ~ /^[ \t]*(\/\/|\*|\/\*|#|<!--)/) next
+    while (match(text, /https?:\/\/[A-Za-z0-9.-]+/)) {
+      host = substr(text, RSTART, RLENGTH)
+      text = substr(text, RSTART + RLENGTH)
+      if (host !~ allow) print loc " " host
+    }
+  }')
+
+# The switches that make the site shell add Google Analytics or custom scripts. Empty is fine.
+SITE_SWITCHES=""
+if [ -f .figma/make/site.json ]; then
+    SITE_SWITCHES=$(grep -nE '"(googleAnalyticsId|headStart|headEnd|bodyStart|bodyEnd)"[[:space:]]*:[[:space:]]*"[^"]+"' .figma/make/site.json)
+fi
+
+# Dependency names that are trackers, error reporters or logging libraries (names only).
+TRACKER_DEPS=$(grep -nHE '^[[:space:]]*"[^"]*(sentry|posthog|mixpanel|amplitude|segment|hotjar|fullstory|logrocket|datadog|newrelic|bugsnag|rollbar|honeybadger|vercel/analytics|react-ga|google-analytics|gtag|plausible|umami|clarity|pino|winston|morgan|bunyan)[^"]*"[[:space:]]*:' package.json server/package.json 2>/dev/null)
+
+if [ -n "$EXTERNAL_HOSTS" ] || [ -n "$SITE_SWITCHES" ] || [ -n "$TRACKER_DEPS" ]; then
+    echo "❌ CRITICAL COMPLIANCE FAILURE: the page shell or build config could load third-party code:"
+    if [ -n "$EXTERNAL_HOSTS" ]; then echo "  unexpected external hosts:"; echo "$EXTERNAL_HOSTS" | sed 's/^/    /'; fi
+    if [ -n "$SITE_SWITCHES" ]; then echo "  analytics or custom-script switch set in .figma/make/site.json:"; echo "$SITE_SWITCHES" | sed 's/^/    /'; fi
+    if [ -n "$TRACKER_DEPS" ]; then echo "  tracker or logging packages in package.json:"; echo "$TRACKER_DEPS" | sed 's/^/    /'; fi
+    FAIL_AUDIT=1
+else
+    echo "✅ SUCCESS: Page shell and build config: no unexpected external hosts, no analytics or custom-script switch, no tracker packages."
 fi
 
 # Container: no volumes, and a read-only root filesystem.
