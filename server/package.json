@@ -1,0 +1,26 @@
+{
+  "name": "muse-server",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "NODE_ENV=production node server.js",
+    "dev": "ACCESS_MODE=open node server.js",
+    "test": "node --test",
+    "explain": "node tools/explain-routing.mjs",
+    "preflight": "node tools/gemini-check.mjs",
+    "smoke": "node tools/smoke-ws.mjs",
+    "check:router": "node tools/router-check.mjs",
+    "check:payload": "node tools/payload-check.mjs",
+    "check": "node tools/router-check.mjs && node tools/payload-check.mjs"
+  },
+  "dependencies": {
+    "@google/genai": "^2.28.0",
+    "allprofanity": "^2.4.0",
+    "obscenity": "^0.4.6",
+    "ws": "^8.22.0"
+  }
+}

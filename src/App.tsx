@@ -9,11 +9,28 @@ import {
   type LessonStep,
   type StyleId,
 } from "./lessons";
+import { useStatelessStream } from "./hooks/useStatelessStream";
+import { exportFrame } from "./lib/exportFrame";
+import { createStrokeTracker } from "./lib/canvasTelemetry";
 
 type Screen = "home" | "lessons" | "canvas" | "gallery";
 
 const GALLERY_LIMIT = 12;
-const GALLERY_KEY = "sunny-artworks";
+
+// Sunny checks in on her own after a short pause, once there are enough new strokes.
+const AUTO_CHECKIN_PAUSE_MS = 4000;
+const AUTO_CHECKIN_STROKES = 10;
+const REPLY_VISIBLE_MS = 12000;
+// Off by default: only drawing statistics leave the device. Set VITE_MUSE_SEND_FRAMES=1 to also send a small snapshot.
+const SEND_FRAMES = import.meta.env.VITE_MUSE_SEND_FRAMES === "1";
+
+type Coach = ReturnType<typeof useStatelessStream>;
+
+function friendlyCoachError(message: string) {
+  return /access validation/i.test(message)
+    ? "Ask a grown-up to unlock Sunny's coaching in the Grown-ups area."
+    : "Sunny can't hear you right now. Keep drawing!";
+}
 
 const colors = ["#E97962", "#EDB44D", "#789D7D", "#6F9FC6", "#755E8B", "#323B43"];
 
@@ -120,7 +137,7 @@ function LessonsScreen({ go, style, pickLesson }: { go: (screen: Screen) => void
   );
 }
 
-function CanvasScreen({ go, lesson }: { go: (screen: Screen) => void; lesson: Lesson }) {
+function CanvasScreen({ go, lesson, addArtwork, coach }: { go: (screen: Screen) => void; lesson: Lesson; addArtwork: (art: Artwork) => void; coach: Coach }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const colorInputRef = useRef<HTMLInputElement>(null);
   const [drawing, setDrawing] = useState(false);
@@ -130,6 +147,13 @@ function CanvasScreen({ go, lesson }: { go: (screen: Screen) => void; lesson: Le
   const [step, setStep] = useState(1);
   const [complete, setComplete] = useState(false);
   const [steps, setSteps] = useState<LessonStep[] | null>(null);
+  const [reply, setReply] = useState<string | null>(null);
+  // Drawing statistics live in a plain object, never in React state.
+  const [tracker] = useState(createStrokeTracker);
+  const coachRef = useRef<Coach>(coach);
+  const askRef = useRef<() => Promise<void>>(async () => {});
+  const sentStrokes = useRef(0);
+  const idleTimer = useRef<number | undefined>(undefined);
 
   // Load this lesson's steps (from the server if connected, otherwise starter steps).
   useEffect(() => {
@@ -181,6 +205,7 @@ function CanvasScreen({ go, lesson }: { go: (screen: Screen) => void; lesson: Le
     const p = point(event);
     if (!ctx) return;
     ctx.beginPath(); ctx.moveTo(p.x, p.y);
+    tracker.beginStroke(p.x, p.y, color, performance.now());
     setDrawing(true); setHasDrawn(true);
   };
   const moveDraw = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -192,17 +217,52 @@ function CanvasScreen({ go, lesson }: { go: (screen: Screen) => void; lesson: Le
     ctx.globalAlpha = tool === "marker" ? 0.55 : 1;
     ctx.lineWidth = tool === "pencil" ? 4 : tool === "marker" ? 18 : 10;
     ctx.lineTo(p.x, p.y); ctx.stroke();
+    tracker.addPoint(p.x, p.y);
   };
   const clearCanvas = () => {
     const canvas = canvasRef.current;
     canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
     setHasDrawn(false); setComplete(false); setStep(1);
+    tracker.reset(); sentStrokes.current = 0; setReply(null); window.clearTimeout(idleTimer.current);
   };
+  // Sunny the coach. Only drawing statistics go to the server (plus a small snapshot if VITE_MUSE_SEND_FRAMES=1).
+  coachRef.current = coach;
+  const askSunny = async () => {
+    const snapshot = tracker.snapshot();
+    if (!snapshot || coachRef.current.pending) return;
+    sentStrokes.current = snapshot.strokeCount;
+    const frame = SEND_FRAMES && canvasRef.current ? exportFrame(canvasRef.current) : undefined;
+    const text = await coachRef.current.dispatchCanvasTelemetry(snapshot, frame);
+    if (text) setReply(text);
+  };
+  askRef.current = askSunny;
+  const endDraw = () => {
+    tracker.endStroke(performance.now());
+    setDrawing(false);
+    window.clearTimeout(idleTimer.current);
+    // After a short pause, Sunny checks in on her own once there has been enough new drawing.
+    idleTimer.current = window.setTimeout(() => {
+      if (tracker.strokeCount() - sentStrokes.current >= AUTO_CHECKIN_STROKES) void askRef.current();
+    }, AUTO_CHECKIN_PAUSE_MS);
+  };
+  useEffect(() => () => window.clearTimeout(idleTimer.current), []);
+  // Ignore an error left over from an earlier screen; only react to errors that happen while this canvas is open.
+  const seenError = useRef(coach.error);
+  useEffect(() => {
+    if (coach.error && coach.error !== seenError.current) setReply(friendlyCoachError(coach.error));
+    seenError.current = coach.error;
+  }, [coach.error]);
+  // Sunny's note never blocks drawing (it ignores touches) and fades after a while.
+  useEffect(() => {
+    if (!reply) return;
+    const timer = window.setTimeout(() => setReply(null), REPLY_VISIBLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [reply]);
   const saveArtwork = () => {
     const data = canvasRef.current?.toDataURL("image/png");
     if (data) {
       const date = new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" });
-      saveToGallery({ data, date, title: `My ${lesson.title.toLowerCase()}` });
+      addArtwork({ data, date, title: `My ${lesson.title.toLowerCase()}` });
     }
     go("gallery");
   };
@@ -239,13 +299,14 @@ function CanvasScreen({ go, lesson }: { go: (screen: Screen) => void; lesson: Le
           </div>
           <strong>{direction.demo}</strong>
         </div>
-        <div className="mascot-talk"><Sun mood={complete ? "celebrating" : step > 1 ? "thinking" : "idle"}/><div className="speech-bubble">{complete ? "You made it!" : isLastStep && steps ? "Nearly there!" : step > 1 ? "Keep going!" : "Start right here"}</div></div>
+        <div className="mascot-talk"><Sun mood={coach.pending ? "thinking" : complete ? "celebrating" : step > 1 ? "thinking" : "idle"}/><div className="speech-bubble">{coach.pending ? "Let me take a look..." : complete ? "You made it!" : isLastStep && steps ? "Nearly there!" : step > 1 ? "Keep going!" : "Start right here"}</div></div>
         <div className="suggested-colors"><span>COLORS TO TRY</span><div>{colors.slice(0, 4).map(c => <button key={c} aria-label="Choose color" className={color === c ? "selected" : ""} style={{ backgroundColor: c }} onClick={() => setColor(c)}/>) }<button className={`choice-color ${isCustomColor ? "selected" : ""}`} aria-label="Pick your own color" onClick={() => colorInputRef.current?.click()} style={isCustomColor ? { background: color } : undefined}><Icon name="palette" size={23}/></button><input ref={colorInputRef} type="color" className="hidden-color-input" value={color} onChange={(e) => setColor(e.target.value)} aria-hidden="true" tabIndex={-1}/></div></div>
       </aside>
       <section className="drawing-area">
         <div className="paper-wrap">
-          <canvas ref={canvasRef} onPointerDown={startDraw} onPointerMove={moveDraw} onPointerUp={() => setDrawing(false)} onPointerCancel={() => setDrawing(false)}/>
+          <canvas ref={canvasRef} onPointerDown={startDraw} onPointerMove={moveDraw} onPointerUp={endDraw} onPointerCancel={endDraw}/>
           {!hasDrawn && <div className="starter-dot"><span/><small>START HERE</small></div>}
+          {reply && !complete && <div className="coach-toast" role="status" aria-live="polite"><Sun compact/><span>{reply}</span></div>}
           {complete && <div className="complete-card"><Sun mood="celebrating" compact/><strong>Fridge-worthy!</strong><SquishButton onClick={saveArtwork}>Save to Fridge</SquishButton></div>}
         </div>
         {!complete && <div className="tool-dock">
@@ -253,6 +314,7 @@ function CanvasScreen({ go, lesson }: { go: (screen: Screen) => void; lesson: Le
             {(["pencil", "marker", "brush"] as const).map(item => <button key={item} className={tool === item ? "active" : ""} onClick={() => setTool(item)} aria-label={item}><Icon name={item}/></button>)}
             <span className="divider"/>
             <button onClick={clearCanvas} aria-label="Magic eraser"><Icon name="eraser"/></button>
+            <button onClick={() => void askSunny()} disabled={coach.pending || !hasDrawn} aria-label="Ask Sunny"><Icon name="sparkle"/></button>
           </div>
           <div className="palette-row">{colors.map(c => <button key={c} aria-label="Choose color" className={color === c ? "active" : ""} style={{ backgroundColor: c }} onClick={() => setColor(c)}/>)}</div>
         </div>}
@@ -263,44 +325,30 @@ function CanvasScreen({ go, lesson }: { go: (screen: Screen) => void; lesson: Le
 
 type Artwork = { data: string; title: string; date: string };
 
-// The gallery lives only in this device's browser storage. Nothing is sent anywhere.
-function loadGallery(): Artwork[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(GALLERY_KEY) || "[]");
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-// Writes the list, dropping the oldest drawings if the device runs out of space.
-function writeGallery(list: Artwork[]): Artwork[] {
-  let next = list.slice(0, GALLERY_LIMIT);
-  while (next.length > 0) {
-    try {
-      localStorage.setItem(GALLERY_KEY, JSON.stringify(next));
-      return next;
-    } catch {
-      next = next.slice(0, -1);
-    }
-  }
-  try {
-    localStorage.setItem(GALLERY_KEY, "[]");
-  } catch {
-    // storage unavailable (private window); the gallery just stays empty
-  }
-  return [];
-}
-
-function saveToGallery(art: Artwork) {
-  writeGallery([art, ...loadGallery()]);
-}
-
-function GalleryScreen({ go }: { go: (screen: Screen) => void }) {
-  const [artworks, setArtworks] = useState<Artwork[]>(loadGallery);
-  const remove = (index: number) => {
-    setArtworks(writeGallery(artworks.filter((_, i) => i !== index)));
+// Grown-ups enter a ticket here to unlock Sunny's coaching. It is kept in memory only and cleared on wipe.
+function CoachPanel({ coach }: { coach: Coach }) {
+  const [ticket, setTicket] = useState("");
+  const unlock = () => {
+    const value = ticket.trim();
+    if (!value) return;
+    coach.setAccessCredential({ type: "magic_ticket", value });
+    setTicket("");
   };
+  return (
+    <section className="coach-panel" aria-label="Sunny's coaching">
+      <p>{coach.hasCredential ? "Sunny's coaching is unlocked until you close the app or wipe memory." : "Grown-ups: enter a ticket to unlock Sunny's coaching. It stays in memory only."}</p>
+      {!coach.hasCredential && (
+        <>
+          <input value={ticket} onChange={(e) => setTicket(e.target.value)} placeholder="Magic ticket" aria-label="Magic ticket" autoComplete="off" autoCapitalize="off" spellCheck={false}/>
+          <SquishButton onClick={unlock}>Unlock coaching</SquishButton>
+        </>
+      )}
+    </section>
+  );
+}
+
+function GalleryScreen({ go, artworks, onRemove, onWipe, coach }: { go: (screen: Screen) => void; artworks: Artwork[]; onRemove: (index: number) => void; onWipe: () => void; coach: Coach }) {
+  const remove = onRemove;
   const download = (art: Artwork) => {
     const link = document.createElement("a"); link.href = art.data; link.download = `${art.title}.png`; link.click();
   };
@@ -310,7 +358,8 @@ function GalleryScreen({ go }: { go: (screen: Screen) => void }) {
   return (
     <main className="screen gallery-screen">
       <nav className="nav-row"><SquishButton className="icon-button" onClick={() => go("home")} label="Home"><Icon name="home"/></SquishButton><span className="parent-badge"><Icon name="lock" size={17}/> GROWN-UPS</span><span/></nav>
-      <header className="gallery-header"><div><p className="eyebrow">THE DIGITAL FRIDGE</p><h1>Look what they made!</h1><p className="subhead">A little gallery of big ideas.</p></div><div className="storage-card"><span><strong>{artworks.length}</strong> of {GALLERY_LIMIT} spots used</span><div className="storage-track"><i style={{ width: `${Math.max(8, artworks.length / GALLERY_LIMIT * 100)}%` }}/></div><small>Saved only on this device</small></div></header>
+      <header className="gallery-header"><div><p className="eyebrow">THE DIGITAL FRIDGE</p><h1>Look what they made!</h1><p className="subhead">A little gallery of big ideas.</p></div><div className="storage-card"><span><strong>{artworks.length}</strong> of {GALLERY_LIMIT} spots used</span><div className="storage-track"><i style={{ width: `${Math.max(8, artworks.length / GALLERY_LIMIT * 100)}%` }}/></div><small>Kept in memory only. Closing the app clears it.</small><button className="squish-button wipe-button" onClick={onWipe}>Wipe volatile memory</button></div></header>
+      <CoachPanel coach={coach}/>
       {artworks.length ? <section className="art-grid">{artworks.map((art, index) => <article className="art-card" key={`${art.title}-${index}`}><div className="art-image"><img src={art.data} alt={art.title}/><button className="delete-art" onClick={() => remove(index)} aria-label="Delete artwork"><Icon name="trash" size={20}/></button></div><div className="art-meta"><div><strong>{art.title}</strong><span>{art.date}</span></div><div className="art-actions"><SquishButton label="Download" onClick={() => download(art)}><Icon name="download" size={22}/></SquishButton><SquishButton label="Print" onClick={() => print(art)}><Icon name="print" size={22}/></SquishButton></div></div></article>)}</section> : <section className="empty-gallery"><div className="empty-doodle"><Icon name="sparkle" size={55}/></div><h2>Your fridge is ready</h2><p>Finish a drawing and save it here for everyone to admire.</p><SquishButton onClick={() => go("lessons")}>Make some art</SquishButton></section>}
     </main>
   );
@@ -320,6 +369,15 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>("home");
   const [style, setStyle] = useState<StyleId>("realism");
   const [lesson, setLesson] = useState<Lesson>(() => lessonsForStyle("realism")[0]);
+  // Artwork lives in RAM only. Closing the app or tapping "Wipe volatile memory" clears it.
+  const [artworks, setArtworks] = useState<Artwork[]>([]);
+  const addArtwork = (art: Artwork) => setArtworks((current) => [art, ...current].slice(0, GALLERY_LIMIT));
+  const removeArtwork = (index: number) => setArtworks((current) => current.filter((_, i) => i !== index));
+  const coach = useStatelessStream();
+  const wipeMemory = () => {
+    setArtworks([]);
+    coach.wipeVolatileMemory();
+  };
 
   const pickStyle = (next: StyleId) => {
     setStyle(next);
@@ -332,6 +390,6 @@ export default function App() {
 
   if (screen === "home") return <HomeScreen go={setScreen} pickStyle={pickStyle}/>;
   if (screen === "lessons") return <LessonsScreen go={setScreen} style={style} pickLesson={pickLesson}/>;
-  if (screen === "canvas") return <CanvasScreen key={lesson.id} go={setScreen} lesson={lesson}/>;
-  return <GalleryScreen go={setScreen}/>;
+  if (screen === "canvas") return <CanvasScreen key={lesson.id} go={setScreen} lesson={lesson} addArtwork={addArtwork} coach={coach}/>;
+  return <GalleryScreen go={setScreen} artworks={artworks} onRemove={removeArtwork} onWipe={wipeMemory} coach={coach}/>;
 }
