@@ -8,6 +8,7 @@ import { WebSocketServer } from "ws";
 import { createAccessVerifier, createSolanaBalanceFetcher } from "./access.js";
 import { createHistoryProofs } from "./historyProof.js";
 import { processMuse } from "./muse.js";
+import { createLessonService } from "./lessons.js";
 
 const MAX_PAYLOAD_BYTES = 1_000_000;
 const MAX_CONNECTIONS = 50;
@@ -21,12 +22,26 @@ export function createServer({
   // One signer for the whole server. HISTORY_SECRET keeps histories valid across restarts;
   // without it a random secret is made now and old histories are refused after a restart.
   historyProofs = createHistoryProofs(),
+  getLesson = createLessonService({ ai, model }),
 }) {
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    if (req.method === "GET" && req.url === "/api/health") {
+    const path = (req.url ?? "").split("?")[0];
+    if (req.method === "GET" && path === "/api/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end('{"ok":true}');
+      return;
+    }
+    // Lesson plans are general content (no child data in or out). The browser fetches them
+    // directly, so allow the front end's origin (any origin when ALLOWED_ORIGIN is unset).
+    const lessonMatch = /^\/api\/lessons\/([a-z0-9-]{1,40})$/.exec(path);
+    if (req.method === "GET" && lessonMatch) {
+      const { status, body } = await getLesson(lessonMatch[1]);
+      res.writeHead(status, {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": allowedOrigin || "*",
+      });
+      res.end(JSON.stringify(body));
       return;
     }
     res.writeHead(404);

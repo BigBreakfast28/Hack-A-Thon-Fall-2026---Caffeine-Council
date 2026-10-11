@@ -1,5 +1,9 @@
 # Connecting lessons to the server
 
+**Status:** the server generates lessons with Gemini (`server/lessons.js`). Gemini plans the steps and sends a few simple shapes per step; the server checks every shape and draws each step's picture itself (earlier steps in gray, the new part in coral). Every word passes the same child-safety check as Sunny's replies, and step titles must fit the coach's lesson alphabet. Each lesson is generated once and kept in memory until the server restarts. Only the lesson ids listed in `server/lessons.js` are accepted, and no child data is part of the request.
+
+The front end finds the lesson server automatically from `VITE_MUSE_WS_URL` (`wss://host/ws` becomes `https://host`). Set `VITE_API_URL` only if lessons live on a different server.
+
 The app no longer hardcodes lesson steps. All lesson content lives in `src/lessons.ts`.
 
 ## How it works

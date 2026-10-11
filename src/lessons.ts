@@ -135,14 +135,35 @@ function isValidSteps(data: unknown): data is LessonStep[] {
   );
 }
 
-const API_URL = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "");
+// The lesson server. VITE_API_URL wins; otherwise it is the same server as the coach
+// (VITE_MUSE_WS_URL, e.g. wss://host/ws becomes https://host).
+function lessonServer(): string | undefined {
+  const explicit = import.meta.env.VITE_API_URL as string | undefined;
+  if (explicit) return explicit.replace(/\/$/, "");
+  const ws = import.meta.env.VITE_MUSE_WS_URL as string | undefined;
+  if (!ws) return undefined;
+  try {
+    const url = new URL(ws);
+    url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+    return url.origin;
+  } catch {
+    return undefined;
+  }
+}
+
+const API_URL = lessonServer();
+const LESSON_TIMEOUT_MS = 30_000;
 
 export async function getLessonSteps(lesson: Lesson): Promise<LessonStep[]> {
   const fallback = starterSteps[lesson.id] ?? genericSteps(lesson);
   if (!API_URL) return fallback;
 
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LESSON_TIMEOUT_MS);
   try {
-    const res = await fetch(`${API_URL}/api/lessons/${encodeURIComponent(lesson.id)}?style=${lesson.style}`);
+    const res = await fetch(`${API_URL}/api/lessons/${encodeURIComponent(lesson.id)}?style=${lesson.style}`, {
+      signal: controller.signal,
+    });
     if (!res.ok) throw new Error(`Server answered ${res.status}`);
     const body = await res.json();
     const steps = Array.isArray(body) ? body : body?.steps;
@@ -151,5 +172,7 @@ export async function getLessonSteps(lesson: Lesson): Promise<LessonStep[]> {
   } catch (err) {
     console.warn("Using starter steps:", err);
     return fallback;
+  } finally {
+    clearTimeout(timer);
   }
 }
