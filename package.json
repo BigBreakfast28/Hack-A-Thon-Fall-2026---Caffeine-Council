@@ -17,7 +17,7 @@
     "check:payload": "npm --prefix server run --silent check:payload --",
     "check:coach": "npm --prefix server run --silent check",
     "check:docker": "node scripts/check-dockerfile.mjs",
-    "test:client": "node --test src/lib/canvasTelemetry.test.mjs src/lib/coachWire.test.mjs src/lib/ruleOptions.test.mjs src/lib/lessonLoader.test.mjs src/lib/strokeCheck.test.mjs src/lib/coachContext.test.mjs"
+    "test:client": "node --test src/lib/canvasTelemetry.test.mjs src/lib/coachWire.test.mjs src/lib/ruleOptions.test.mjs src/lib/lessonLoader.test.mjs src/lib/checkInScheduler.test.mjs src/lib/strokeCheck.test.mjs src/lib/coachContext.test.mjs"
   },
   "dependencies": {
     "@fontsource/baloo-2": "^5.3.0",

@@ -39,10 +39,26 @@ const RULES = [
   ["adult", /\b(?:drugs?|alcohol|beer|wine|cigarettes?|vape|vaping|naked|sexy|sex)\b/i],
 ];
 
+// Ordinary art talk that contains a word above. It is blanked out before checking, and nothing else
+// is, so a reply that also says something harmful is still caught. Found by testing 20 harmless
+// replies: colour names (wine-red, blood-orange), dead plants, a glue gun, and "nothing is wrong".
+const ALLOWED = new RegExp(
+  [
+    "\\b(?:wine|blood)[ -](?:red|orange|colou?red?)\\b",
+    "\\b(?:burgundy|blood orange)\\b",
+    "\\bdead[ -](?:branch(?:es)?|leaf|leaves|tree|trees|end|flowers?|grass|wood|twigs?|centre|center)\\b",
+    "\\b(?:glue|paint|spray) gun\\b",
+    "\\b(?:nothing|not|never)\\s+(?:is\\s+|was\\s+)?(?:bad|wrong|ugly|messy)\\b",
+    "\\b(?:isn['\u2019]t|aren['\u2019]t|wasn['\u2019]t)\\s+(?:bad|wrong|ugly|messy)\\b",
+    "\\bno\\s+(?:bad|wrong)\\b",
+  ].join("|"),
+  "gi",
+);
+
 /** The code of the first rule the text breaks, or null when it is fine. Never throws, never keeps the text. */
 export function screenReply(text) {
   if (typeof text !== "string" || text.length === 0) return null;
-  const checked = text.normalize("NFKC").slice(0, 5000);
+  const checked = text.normalize("NFKC").slice(0, 5000).replace(ALLOWED, " ");
   for (const [code, pattern] of RULES) {
     if (pattern.test(checked)) return code;
   }

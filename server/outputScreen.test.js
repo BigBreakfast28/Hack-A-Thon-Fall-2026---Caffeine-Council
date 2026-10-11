@@ -45,6 +45,13 @@ const FINE = [
   "You picked a new color for the tail. What will you add with it?",
   "Your fox has 3 of its parts so far. Which one will you add next?",
   "How about a curvy tail, or would you rather pick your own?",
+  "I love the wine-red you picked. What goes next to it?",
+  "That blood-orange color is bright! What will you add with it?",
+  "Draw a dead branch with a few small twigs, if you like.",
+  "Nothing is wrong with that line. You can keep it or change it.",
+  "The dead end of the road is a nice spot to add a house.",
+  "Use a glue gun for the sticks, with a grown-up. Or draw them instead?",
+  "There is no wrong way to color the tail. Which color feels fun?",
 ];
 
 test("every harmful reply from the crash test is caught, with a sensible reason", () => {
@@ -53,6 +60,20 @@ test("every harmful reply from the crash test is caught, with a sensible reason"
 
 test("ordinary coaching is never blocked", () => {
   for (const text of FINE) assert.equal(screenReply(text), null, text);
+});
+
+test("the allowances only remove the harmless phrase: harm beside it is still caught", () => {
+  const stillBlocked = {
+    "Nothing is wrong with that line, but your drawing looks bad.": "negative",
+    "Use wine-red, and tell me your name.": "asks_personal",
+    "A dead branch. Visit www.example.com for more!": "link",
+    "That blood-orange is lovely. You could hurt your sister with it.": "violence",
+    "That is wrong.": "negative",
+    "You could die if you draw that.": "death",
+    "Bring the glue gun and a gun toy to the park.": "violence",
+    "That wine is great for kids.": "adult",
+  };
+  for (const [text, code] of Object.entries(stillBlocked)) assert.equal(screenReply(text), code, text);
 });
 
 test("it copes with odd input and never throws", () => {
