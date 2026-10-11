@@ -10,20 +10,34 @@ import {
   type LessonStep,
   type StyleId,
 } from "./lessons";
-import { useStatelessStream } from "./hooks/useStatelessStream";
+import { useStatelessStream, type ChildRule, type CoachingMode } from "./hooks/useStatelessStream";
 import { exportFrame } from "./lib/exportFrame";
 import { createStrokeTracker } from "./lib/canvasTelemetry";
+import { autoCheckInDue, blankPageNudgeDue, buildMetrics, lessonContext } from "./lib/coachContext";
+import { RULE_LIMITS, RULE_MARKS } from "./lib/ruleOptions";
+import { ruleAdherence, stepProgress } from "./lib/strokeCheck";
 
 type Screen = "home" | "lessons" | "canvas" | "gallery";
 
 const GALLERY_LIMIT = 12;
 
-// Sunny checks in on her own after a short pause, once there are enough new strokes.
-const AUTO_CHECKIN_PAUSE_MS = 4000;
-const AUTO_CHECKIN_STROKES = 10;
-const REPLY_VISIBLE_MS = 12000;
-// Off by default: only drawing statistics leave the device. Set VITE_MUSE_SEND_FRAMES=1 to also send a small snapshot.
-const SEND_FRAMES = import.meta.env.VITE_MUSE_SEND_FRAMES === "1";
+// When Sunny checks in by herself is decided in src/lib/coachContext.ts (tested there).
+const REPLY_VISIBLE_MS = 20000;
+// Off by default: only drawing statistics leave the device. A grown-up can turn the snapshot on in the
+// Grown-ups area, or set VITE_MUSE_SEND_FRAMES=1 to have it on from the start.
+const SEND_FRAMES_DEFAULT = import.meta.env.VITE_MUSE_SEND_FRAMES === "1";
+
+// What a child can ask Sunny for. The words are the child's; the ids are the server's modes.
+const HELP_CHOICES: { mode?: CoachingMode; label: string }[] = [
+  { label: "Just check in" },
+  { mode: "challenge", label: "Give me a challenge" },
+  { mode: "idea", label: "Help me think of something" },
+  { mode: "add", label: "What can I add?" },
+  { mode: "finish", label: "Help me finish" },
+  { mode: "cheer", label: "Just cheer me on" },
+];
+
+type AskOptions = { mode?: CoachingMode; childRule?: ChildRule; auto?: boolean; forStep?: number };
 
 type Coach = ReturnType<typeof useStatelessStream>;
 
@@ -66,6 +80,7 @@ function Icon({ name, size = 28 }: { name: IconName; size?: number }) {
     room: <><path d="M7 10v31h34V10M7 27h34M23 10v17"/><path d="M11 35h10v6m6-8h9v8M12 16h6v6h-6z"/></>,
     train: <><path d="M10 31V12c0-5 28-5 28 0v19c0 4-4 7-8 7H18c-4 0-8-3-8-7Z"/><path d="M10 24h28M16 11v8h16v-8M16 38l-5 5m21-5 5 5"/><circle cx="17" cy="30" r="2"/><circle cx="31" cy="30" r="2"/></>,
     building: <><path d="M13 42V7h24v35M8 42h34M19 14h5m4 0h4m-13 7h5m4 0h4m-13 7h5m4 0h4m-8 14v-7h8v7"/></>,
+    fox: <><path d="M8 8l10 12M40 8L30 20"/><path d="M8 8c-2 14 2 26 16 34 14-8 18-20 16-34l-10 8h-12Z"/><path d="M19 28h.01M29 28h.01M24 36l-3-2h6Z"/></>,
   };
   return <svg {...common}>{paths[name]}</svg>;
 }
@@ -138,7 +153,7 @@ function LessonsScreen({ go, style, pickLesson }: { go: (screen: Screen) => void
   );
 }
 
-function CanvasScreen({ go, lesson, addArtwork, coach }: { go: (screen: Screen) => void; lesson: Lesson; addArtwork: (art: Artwork) => void; coach: Coach }) {
+function CanvasScreen({ go, lesson, addArtwork, coach, shareDrawing }: { go: (screen: Screen) => void; lesson: Lesson; addArtwork: (art: Artwork) => void; coach: Coach; shareDrawing: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const colorInputRef = useRef<HTMLInputElement>(null);
   const [drawing, setDrawing] = useState(false);
@@ -149,12 +164,30 @@ function CanvasScreen({ go, lesson, addArtwork, coach }: { go: (screen: Screen) 
   const [complete, setComplete] = useState(false);
   const [steps, setSteps] = useState<LessonStep[] | null>(null);
   const [reply, setReply] = useState<string | null>(null);
+  // The toast over the paper fades; the last thing Sunny said stays in her speech bubble.
+  const [lastNote, setLastNote] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [rulePickerOpen, setRulePickerOpen] = useState(false);
+  const [pickMark, setPickMark] = useState(RULE_MARKS[0].id);
+  const [pickLimit, setPickLimit] = useState(RULE_LIMITS[0].id);
+  const [rule, setRule] = useState<ChildRule | null>(null);
+  const [stepReady, setStepReady] = useState(false);
   // Drawing statistics live in a plain object, never in React state.
   const [tracker] = useState(createStrokeTracker);
   const coachRef = useRef<Coach>(coach);
-  const askRef = useRef<() => Promise<void>>(async () => {});
-  const sentStrokes = useRef(0);
-  const idleTimer = useRef<number | undefined>(undefined);
+  const askRef = useRef<(options?: AskOptions) => Promise<void>>(async () => {});
+  const sentStrokes = useRef(0); // strokes already covered by a check-in that went through
+  const stepStart = useRef(0); // stroke number where the current lesson step began
+  const ruleStart = useRef(0); // stroke number where the child's rule began
+  const openedAt = useRef(performance.now());
+  const lastSentAt = useRef(Date.now());
+  const lastAttemptAt = useRef(0);
+  const lastMoveAt = useRef(Date.now());
+  const drawingRef = useRef(false);
+  const nudged = useRef(false);
+  const lastAskWasManual = useRef(false);
+  const inFlight = useRef(false); // true from the moment a request starts, before React has re-rendered
+  const queued = useRef<AskOptions | null>(null); // the latest tap made while Sunny was busy
 
   // Load this lesson's steps (from the server if connected, otherwise starter steps).
   useEffect(() => {
@@ -207,6 +240,7 @@ function CanvasScreen({ go, lesson, addArtwork, coach }: { go: (screen: Screen) 
     if (!ctx) return;
     ctx.beginPath(); ctx.moveTo(p.x, p.y);
     tracker.beginStroke(p.x, p.y, color, performance.now());
+    drawingRef.current = true; lastMoveAt.current = Date.now();
     setDrawing(true); setHasDrawn(true);
   };
   const moveDraw = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -219,38 +253,144 @@ function CanvasScreen({ go, lesson, addArtwork, coach }: { go: (screen: Screen) 
     ctx.lineWidth = tool === "pencil" ? 4 : tool === "marker" ? 18 : 10;
     ctx.lineTo(p.x, p.y); ctx.stroke();
     tracker.addPoint(p.x, p.y);
+    lastMoveAt.current = Date.now();
   };
   const clearCanvas = () => {
     const canvas = canvasRef.current;
     canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
-    setHasDrawn(false); setComplete(false); setStep(1);
-    tracker.reset(); sentStrokes.current = 0; setReply(null); window.clearTimeout(idleTimer.current);
+    setHasDrawn(false); setComplete(false); setStep(1); setStepReady(false);
+    tracker.reset(); sentStrokes.current = 0; stepStart.current = 0; ruleStart.current = 0;
+    openedAt.current = performance.now(); lastSentAt.current = Date.now(); nudged.current = false;
+    setReply(null);
   };
-  // Sunny the coach. Only drawing statistics go to the server (plus a small snapshot if VITE_MUSE_SEND_FRAMES=1).
+  // The shorter side of the drawing page, so "small marks" and "big marks" mean the same on any screen.
+  const pageMin = () => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    return rect ? Math.max(1, Math.min(rect.width, rect.height)) : 600;
+  };
+  // Sunny the coach. Only numbers go to the server: drawing statistics, plus counts from comparing the
+  // child's stroke kinds with the lesson step or their own rule on this device. A small snapshot goes
+  // too only if a grown-up turned that on.
   coachRef.current = coach;
-  const askSunny = async () => {
-    const snapshot = tracker.snapshot();
-    if (!snapshot || coachRef.current.pending) return;
-    sentStrokes.current = snapshot.strokeCount;
-    const frame = SEND_FRAMES && canvasRef.current ? exportFrame(canvasRef.current) : undefined;
-    const text = await coachRef.current.dispatchCanvasTelemetry(snapshot, frame);
-    if (text) setReply(text);
+  const ask = async (options: AskOptions = {}) => {
+    const current = coachRef.current;
+    if (!options.auto && !current.hasCredential) {
+      // No ticket yet: say so at once, with no wait for the server.
+      setReply(friendlyCoachError("Access validation failed."));
+      return;
+    }
+    if (inFlight.current || current.pending) {
+      // A child's tap is never ignored: the latest one is kept and runs as soon as Sunny is free.
+      if (!options.auto) {
+        queued.current = options;
+        setReply("Got it! Sunny is finishing her last thought, then she will answer.");
+      }
+      return;
+    }
+    if (options.auto && !current.hasCredential) return; // never an unprompted "ask a grown-up" message
+    lastAskWasManual.current = !options.auto;
+    lastAttemptAt.current = Date.now();
+    setReply(null); // so the "Sunny is thinking" note shows straight away
+    // The child's own rule stays in play until they drop it, so check-ins keep using it.
+    const activeRule = options.childRule ?? rule ?? undefined;
+    const requested = options.mode ?? (activeRule ? "rule" : undefined);
+    const mode = requested === "rule" && !activeRule ? undefined : requested;
+    const childRule = mode === "rule" ? activeRule : undefined;
+    const stepIndex = (options.forStep ?? step) - 1;
+    const expects = steps?.[stepIndex]?.expects;
+    const strokesNow = tracker.strokeCount();
+    const stepCounts = expects ? stepProgress(tracker.summariesSince(stepStart.current), expects) : undefined;
+    const ruleCounts = childRule ? ruleAdherence(tracker.summariesSince(ruleStart.current), childRule, pageMin()) : undefined;
+    const metrics = buildMetrics(tracker.snapshot(), {
+      elapsedSeconds: (performance.now() - openedAt.current) / 1000,
+      step: stepCounts,
+      rule: ruleCounts,
+    });
+    const frame = (shareDrawing || SEND_FRAMES_DEFAULT) && canvasRef.current && strokesNow > 0 ? exportFrame(canvasRef.current) : undefined;
+    const stepTitle = steps?.[stepIndex]?.title;
+    const extras = { childRule, lesson: stepTitle ? lessonContext(lesson.title, stepTitle) : undefined };
+    let text: string | null = null;
+    inFlight.current = true;
+    try {
+      text = await current.dispatchCanvasTelemetry(metrics, frame, mode, extras);
+    } finally {
+      inFlight.current = false;
+    }
+    if (text) {
+      // Only a check-in that went through uses up the new strokes, so a failed one is tried again.
+      sentStrokes.current = strokesNow;
+      lastSentAt.current = Date.now();
+      setReply(text);
+      setLastNote(text);
+    }
+    // Whatever the child asked for while Sunny was busy runs now.
+    const waiting = queued.current;
+    queued.current = null;
+    if (waiting) void askRef.current(waiting);
   };
-  askRef.current = askSunny;
+  askRef.current = ask;
+  const chooseHelp = (mode?: CoachingMode) => {
+    setMenuOpen(false);
+    void ask({ mode });
+  };
+  const startRule = () => {
+    const chosen = { mark: pickMark, limit: pickLimit };
+    ruleStart.current = tracker.strokeCount();
+    setRule(chosen);
+    setRulePickerOpen(false);
+    setMenuOpen(false);
+    void ask({ mode: "rule", childRule: chosen });
+  };
+  const goNext = () => {
+    if (isLastStep) {
+      setComplete(true);
+      return;
+    }
+    const next = step + 1;
+    stepStart.current = tracker.strokeCount();
+    setStep(next);
+    setStepReady(false);
+    // Sunny says something about the step just finished and the one that starts now.
+    void ask({ auto: true, forStep: next });
+  };
   const endDraw = () => {
     tracker.endStroke(performance.now());
+    drawingRef.current = false;
+    lastMoveAt.current = Date.now();
     setDrawing(false);
-    window.clearTimeout(idleTimer.current);
-    // After a short pause, Sunny checks in on her own once there has been enough new drawing.
-    idleTimer.current = window.setTimeout(() => {
-      if (tracker.strokeCount() - sentStrokes.current >= AUTO_CHECKIN_STROKES) void askRef.current();
-    }, AUTO_CHECKIN_PAUSE_MS);
+    // A gentle nudge, never a grade: the Next button starts to pulse once most of the step's shapes look drawn.
+    const expects = steps?.[step - 1]?.expects;
+    setStepReady(expects ? stepProgress(tracker.summariesSince(stepStart.current), expects).ready : false);
   };
-  useEffect(() => () => window.clearTimeout(idleTimer.current), []);
-  // Ignore an error left over from an earlier screen; only react to errors that happen while this canvas is open.
+  // Sunny checks in by herself, and on a page that stays empty she offers a way to start. The rules
+  // for when are in src/lib/coachContext.ts. One timer covers children who pause and children who never do.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      const current = coachRef.current;
+      const base = { unlocked: current.hasCredential, pending: current.pending };
+      if (blankPageNudgeDue({ ...base, strokeCount: tracker.strokeCount(), msOnPage: performance.now() - openedAt.current, alreadyNudged: nudged.current })) {
+        nudged.current = true;
+        void askRef.current({ auto: true });
+        return;
+      }
+      const due = autoCheckInDue({
+        ...base,
+        drawingNow: drawingRef.current,
+        newStrokes: tracker.strokeCount() - sentStrokes.current,
+        idleMs: now - lastMoveAt.current,
+        msSinceLastSend: now - lastSentAt.current,
+        msSinceLastAttempt: now - lastAttemptAt.current,
+      });
+      if (due) void askRef.current({ auto: true });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [tracker]);
+  // Ignore an error left over from an earlier screen. Only a request the child asked for shows an error,
+  // so a server that is down does not nag from the background.
   const seenError = useRef(coach.error);
   useEffect(() => {
-    if (coach.error && coach.error !== seenError.current) setReply(friendlyCoachError(coach.error));
+    if (coach.error && coach.error !== seenError.current && lastAskWasManual.current) setReply(friendlyCoachError(coach.error));
     seenError.current = coach.error;
   }, [coach.error]);
   // Sunny's note never blocks drawing (it ignores touches) and fades after a while.
@@ -276,11 +416,12 @@ function CanvasScreen({ go, lesson, addArtwork, coach }: { go: (screen: Screen) 
           <span className={`step-pill ${isLastStep ? "final" : ""}`}>{!steps ? "LOADING" : isLastStep ? "FINAL STEP" : `STEP ${step} OF ${totalSteps}`}</span>
           <h2>{direction.title}</h2>
           <p>{direction.copy}</p>
+          {rule && <button className="rule-pill" onClick={() => setRule(null)} aria-label="Stop using my rule">Your rule: {RULE_MARKS.find((option) => option.id === rule.mark)?.label} · {RULE_LIMITS.find((option) => option.id === rule.limit)?.label} <span aria-hidden="true">✕</span></button>}
           {steps && <SquishButton
-            className={`next-step-button ${isLastStep ? "finish" : ""}`}
-            onClick={() => !isLastStep ? setStep(step + 1) : setComplete(true)}
+            className={`next-step-button ${isLastStep ? "finish" : ""} ${stepReady ? "ready" : ""}`}
+            onClick={goNext}
           >
-            {isLastStep ? "Finish drawing" : "Next step"} <span aria-hidden="true">→</span>
+            {stepReady ? (isLastStep ? "Ready to finish" : "Ready for the next step?") : isLastStep ? "Finish drawing" : "Next step"} <span aria-hidden="true">→</span>
           </SquishButton>}
         </div>
         <div className="demonstration-card" aria-label="Drawing demonstration">
@@ -300,22 +441,40 @@ function CanvasScreen({ go, lesson, addArtwork, coach }: { go: (screen: Screen) 
           </div>
           <strong>{direction.demo}</strong>
         </div>
-        <div className="mascot-talk"><Sun mood={coach.pending ? "thinking" : complete ? "celebrating" : step > 1 ? "thinking" : "idle"}/><div className="speech-bubble">{coach.pending ? "Let me take a look..." : complete ? "You made it!" : isLastStep && steps ? "Nearly there!" : step > 1 ? "Keep going!" : "Start right here"}</div></div>
+        <div className="mascot-talk"><Sun mood={coach.pending ? "thinking" : complete ? "celebrating" : step > 1 ? "thinking" : "idle"}/><div className="speech-bubble">{coach.pending ? "Let me take a look..." : complete ? "You made it!" : lastNote ?? (isLastStep && steps ? "Nearly there!" : step > 1 ? "Keep going!" : "Start right here")}</div></div>
         <div className="suggested-colors"><span>COLORS TO TRY</span><div>{colors.slice(0, 4).map(c => <button key={c} aria-label="Choose color" className={color === c ? "selected" : ""} style={{ backgroundColor: c }} onClick={() => setColor(c)}/>) }<button className={`choice-color ${isCustomColor ? "selected" : ""}`} aria-label="Pick your own color" onClick={() => colorInputRef.current?.click()} style={isCustomColor ? { background: color } : undefined}><Icon name="palette" size={23}/></button><input ref={colorInputRef} type="color" className="hidden-color-input" value={color} onChange={(e) => setColor(e.target.value)} aria-hidden="true" tabIndex={-1}/></div></div>
       </aside>
       <section className="drawing-area">
         <div className="paper-wrap">
           <canvas ref={canvasRef} onPointerDown={startDraw} onPointerMove={moveDraw} onPointerUp={endDraw} onPointerCancel={endDraw}/>
           {!hasDrawn && <div className="starter-dot"><span/><small>START HERE</small></div>}
+          {coach.pending && !reply && !complete && <div className="coach-toast thinking" role="status" aria-live="polite"><Sun compact mood="thinking"/><span>Sunny is thinking<i aria-hidden="true">...</i></span></div>}
           {reply && !complete && <div className="coach-toast" role="status" aria-live="polite"><Sun compact/><span>{reply}</span></div>}
           {complete && <div className="complete-card"><Sun mood="celebrating" compact/><strong>Fridge-worthy!</strong><SquishButton onClick={saveArtwork}>Save to Fridge</SquishButton></div>}
         </div>
+        {menuOpen && !complete && (
+          <div className="coach-menu" role="menu" aria-label="Ask Sunny for help">
+            {!rulePickerOpen ? (
+              <>
+                {HELP_CHOICES.map((choice) => <button key={choice.label} role="menuitem" onClick={() => chooseHelp(choice.mode)}>{choice.label}</button>)}
+                <button role="menuitem" onClick={() => setRulePickerOpen(true)}>Make my own rule</button>
+              </>
+            ) : (
+              <div className="rule-picker">
+                <strong>Pick one of each</strong>
+                <div>{RULE_MARKS.map((option) => <button key={option.id} aria-pressed={pickMark === option.id} className={pickMark === option.id ? "on" : ""} onClick={() => setPickMark(option.id)}>{option.label}</button>)}</div>
+                <div>{RULE_LIMITS.map((option) => <button key={option.id} aria-pressed={pickLimit === option.id} className={pickLimit === option.id ? "on" : ""} onClick={() => setPickLimit(option.id)}>{option.label}</button>)}</div>
+                <div className="rule-actions"><button onClick={() => setRulePickerOpen(false)}>Back</button><button className="go" onClick={startRule}>Start my rule</button></div>
+              </div>
+            )}
+          </div>
+        )}
         {!complete && <div className="tool-dock">
           <div className="tool-group">
             {(["pencil", "marker", "brush"] as const).map(item => <button key={item} className={tool === item ? "active" : ""} onClick={() => setTool(item)} aria-label={item}><Icon name={item}/></button>)}
             <span className="divider"/>
             <button onClick={clearCanvas} aria-label="Magic eraser"><Icon name="eraser"/></button>
-            <button onClick={() => void askSunny()} disabled={coach.pending || !hasDrawn} aria-label="Ask Sunny"><Icon name="sparkle"/></button>
+            <button onClick={() => { setMenuOpen((open) => !open); setRulePickerOpen(false); }} aria-label="Ask Sunny" aria-expanded={menuOpen}><Icon name="sparkle"/></button>
           </div>
           <div className="palette-row">{colors.map(c => <button key={c} aria-label="Choose color" className={color === c ? "active" : ""} style={{ backgroundColor: c }} onClick={() => setColor(c)}/>)}</div>
         </div>}
@@ -327,8 +486,9 @@ function CanvasScreen({ go, lesson, addArtwork, coach }: { go: (screen: Screen) 
 type Artwork = { data: string; title: string; date: string };
 
 // Grown-ups enter a ticket here to unlock Sunny's coaching. It is kept in memory only and cleared on wipe.
-function CoachPanel({ coach }: { coach: Coach }) {
+function CoachPanel({ coach, shareDrawing, onShareDrawing }: { coach: Coach; shareDrawing: boolean; onShareDrawing: (on: boolean) => void }) {
   const [ticket, setTicket] = useState("");
+  const meta = coach.lastMeta;
   const unlock = () => {
     const value = ticket.trim();
     if (!value) return;
@@ -344,11 +504,25 @@ function CoachPanel({ coach }: { coach: Coach }) {
           <SquishButton onClick={unlock}>Unlock coaching</SquishButton>
         </>
       )}
+      <label className="share-toggle">
+        <input type="checkbox" checked={shareDrawing} onChange={(event) => onShareDrawing(event.target.checked)}/>
+        <span>Let Sunny see the drawing</span>
+      </label>
+      <small className="share-note">Off by default. When on, a small picture of the canvas goes to Google's Gemini with each check-in, so Sunny can talk about what she sees. This app stores nothing, but Google may keep what it receives for a while to watch for abuse. Turn it off any time.</small>
+      {meta && (
+        <details className="studio-note">
+          <summary>Why Sunny answered that way</summary>
+          <p><strong>{meta.framework}.</strong> {meta.reason}</p>
+          <p>{meta.evidence}</p>
+          <p><em>Keep in mind:</em> {meta.caveat}</p>
+          {meta.studies.length > 0 && <p><em>Based on:</em> {meta.studies.join("; ")}</p>}
+        </details>
+      )}
     </section>
   );
 }
 
-function GalleryScreen({ go, artworks, onRemove, onWipe, coach }: { go: (screen: Screen) => void; artworks: Artwork[]; onRemove: (index: number) => void; onWipe: () => void; coach: Coach }) {
+function GalleryScreen({ go, artworks, onRemove, onWipe, coach, shareDrawing, onShareDrawing }: { go: (screen: Screen) => void; artworks: Artwork[]; onRemove: (index: number) => void; onWipe: () => void; coach: Coach; shareDrawing: boolean; onShareDrawing: (on: boolean) => void }) {
   const remove = onRemove;
   const download = (art: Artwork) => {
     const link = document.createElement("a"); link.href = art.data; link.download = `${art.title}.png`; link.click();
@@ -360,7 +534,7 @@ function GalleryScreen({ go, artworks, onRemove, onWipe, coach }: { go: (screen:
     <main className="screen gallery-screen">
       <nav className="nav-row"><SquishButton className="icon-button" onClick={() => go("home")} label="Home"><Icon name="home"/></SquishButton><span className="parent-badge"><Icon name="lock" size={17}/> GROWN-UPS</span><span/></nav>
       <header className="gallery-header"><div><p className="eyebrow">THE DIGITAL FRIDGE</p><h1>Look what they made!</h1><p className="subhead">A little gallery of big ideas.</p></div><div className="storage-card"><span><strong>{artworks.length}</strong> of {GALLERY_LIMIT} spots used</span><div className="storage-track"><i style={{ width: `${Math.max(8, artworks.length / GALLERY_LIMIT * 100)}%` }}/></div><small>Kept in memory only. Closing the app clears it.</small><button className="squish-button wipe-button" onClick={onWipe}>Wipe volatile memory</button></div></header>
-      <CoachPanel coach={coach}/>
+      <CoachPanel coach={coach} shareDrawing={shareDrawing} onShareDrawing={onShareDrawing}/>
       {artworks.length ? <section className="art-grid">{artworks.map((art, index) => <article className="art-card" key={`${art.title}-${index}`}><div className="art-image"><img src={art.data} alt={art.title}/><button className="delete-art" onClick={() => remove(index)} aria-label="Delete artwork"><Icon name="trash" size={20}/></button></div><div className="art-meta"><div><strong>{art.title}</strong><span>{art.date}</span></div><div className="art-actions"><SquishButton label="Download" onClick={() => download(art)}><Icon name="download" size={22}/></SquishButton><SquishButton label="Print" onClick={() => print(art)}><Icon name="print" size={22}/></SquishButton></div></div></article>)}</section> : <section className="empty-gallery"><div className="empty-doodle"><Icon name="sparkle" size={55}/></div><h2>Your fridge is ready</h2><p>Finish a drawing and save it here for everyone to admire.</p><SquishButton onClick={() => go("lessons")}>Make some art</SquishButton></section>}
     </main>
   );
@@ -375,8 +549,11 @@ export default function App() {
   const addArtwork = (art: Artwork) => setArtworks((current) => [art, ...current].slice(0, GALLERY_LIMIT));
   const removeArtwork = (index: number) => setArtworks((current) => current.filter((_, i) => i !== index));
   const coach = useStatelessStream();
+  // Off until a grown-up turns it on. Held in memory only and cleared by the wipe.
+  const [shareDrawing, setShareDrawing] = useState(false);
   const wipeMemory = () => {
     setArtworks([]);
+    setShareDrawing(false);
     coach.wipeVolatileMemory();
   };
 
@@ -393,6 +570,6 @@ export default function App() {
 
   if (screen === "home") return <HomeScreen go={setScreen} pickStyle={pickStyle}/>;
   if (screen === "lessons") return <LessonsScreen go={setScreen} style={style} pickLesson={pickLesson}/>;
-  if (screen === "canvas") return <CanvasScreen key={lesson.id} go={setScreen} lesson={lesson} addArtwork={addArtwork} coach={coach}/>;
-  return <GalleryScreen go={setScreen} artworks={artworks} onRemove={removeArtwork} onWipe={wipeMemory} coach={coach}/>;
+  if (screen === "canvas") return <CanvasScreen key={lesson.id} go={setScreen} lesson={lesson} addArtwork={addArtwork} coach={coach} shareDrawing={shareDrawing}/>;
+  return <GalleryScreen go={setScreen} artworks={artworks} onRemove={removeArtwork} onWipe={wipeMemory} coach={coach} shareDrawing={shareDrawing} onShareDrawing={setShareDrawing}/>;
 }

@@ -8,6 +8,7 @@
 // See LESSON_API.md for what the server should send back.
 
 import { createLessonLoader } from "./lib/lessonLoader";
+import { cleanExpects, type StepExpects } from "./lib/strokeCheck";
 
 export type IconName =
   | "apple"
@@ -27,7 +28,8 @@ export type IconName =
   | "palette"
   | "room"
   | "train"
-  | "building";
+  | "building"
+  | "fox";
 
 export type StyleId = "realism" | "sumi-e" | "graphic-novel";
 
@@ -53,6 +55,9 @@ export type LessonStep = {
   copy: string; // the instruction the kid reads (and Sunny says)
   demo: string; // one-line caption under the picture
   imageUrl?: string; // optional picture for this step (AI-generated or a file)
+  // For each shape in the step, the stroke kinds that could draw it. Only the lesson server sends
+  // this. With it the app can tell, on the device, when the child has drawn what the step asks for.
+  expects?: StepExpects;
 };
 
 export const styles: ArtStyle[] = [
@@ -65,6 +70,7 @@ export const lessons: Lesson[] = [
   { id: "cozy-room", style: "realism", title: "Cozy room", tags: ["Perspective", "Color"], icon: "room", tone: "peach" },
   { id: "little-train", style: "realism", title: "Little train", tags: ["Shapes", "Shading"], icon: "train", tone: "blue" },
   { id: "tall-building", style: "realism", title: "Tall building", tags: ["Perspective"], icon: "building", tone: "yellow" },
+  { id: "friendly-fox", style: "realism", title: "Friendly fox", tags: ["Shapes", "Animals"], icon: "fox", tone: "peach" },
   { id: "bamboo-stalk", style: "sumi-e", title: "Bamboo stalk", tags: ["Brush strokes"], icon: "bamboo", tone: "sage" },
   { id: "ink-apple", style: "sumi-e", title: "Ink apple", tags: ["Shapes", "Shading"], icon: "apple", tone: "peach" },
   { id: "city-panel", style: "graphic-novel", title: "City panel", tags: ["Perspective", "Story"], icon: "city", tone: "blue" },
@@ -98,6 +104,12 @@ const starterSteps: Record<string, LessonStep[]> = {
     { title: "Add the windows", copy: "Draw rows of small squares, one row at a time.", demo: "Rows of windows show the floors." },
     { title: "Add a door", copy: "Draw a door at the bottom, right in the middle.", demo: "Every building needs a way in." },
     { title: "Make it stand out", copy: "Color the sky behind it. Your building will pop!", demo: "A colored sky makes it shine." },
+  ],
+  "friendly-fox": [
+    { title: "Draw the big head", copy: "Draw one big round shape for the fox's head. It can be wobbly.", demo: "A big round head." },
+    { title: "Add two pointy ears", copy: "Draw a little pointy hat on each side of the top of the head.", demo: "Two ears on top." },
+    { title: "Give it a face", copy: "Add two small eyes and a little nose. You pick where they go.", demo: "Eyes and a nose." },
+    { title: "Add a bushy tail", copy: "Draw a big curvy tail next to your fox. Make it as fluffy as you like.", demo: "A big curvy tail." },
   ],
   "bamboo-stalk": [
     { title: "One long stroke", copy: "Use the brush. Pull one long line from the bottom to the top, slowly.", demo: "Bamboo grows in one long stroke." },
@@ -174,7 +186,8 @@ async function fetchServerSteps(id: string): Promise<LessonStep[] | null> {
     const body = await res.json();
     const steps = Array.isArray(body) ? body : body?.steps;
     if (!isValidSteps(steps)) throw new Error("Server sent steps in the wrong shape");
-    return steps;
+    // Keep only well-formed stroke hints; anything else is dropped and the step simply has none.
+    return steps.map((step) => ({ ...step, expects: cleanExpects((step as { expects?: unknown }).expects) }));
   } catch (err) {
     console.warn("Using starter steps:", err);
     return null;

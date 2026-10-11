@@ -12,6 +12,7 @@
 const MAX_SECONDS = 60 * 60 * 3;
 const MAX_STROKES = 100000;
 const MAX_COLORS = 64;
+const MAX_STEP_SHAPES = 12;
 // Colors end up inside the model prompt, so only hex codes or short plain color names
 // are accepted. Free text here would be a way to smuggle instructions to the model.
 const COLOR_PATTERN = /^(#[0-9a-fA-F]{3,8}|[a-zA-Z]{3,20})$/;
@@ -44,7 +45,17 @@ export function parseMetrics(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     return { ok: false, error: "canvasMetrics must be an object" };
   }
-  const { durationSeconds, strokeCount, shapeDiversityScore, elapsedSeconds, primaryColors = [] } = input;
+  const {
+    durationSeconds,
+    strokeCount,
+    shapeDiversityScore,
+    elapsedSeconds,
+    stepShapesExpected,
+    stepShapesDrawn,
+    ruleStrokes,
+    ruleFollowed,
+    primaryColors = [],
+  } = input;
 
   if (!Number.isFinite(durationSeconds) || durationSeconds < 0 || durationSeconds > MAX_SECONDS) {
     return { ok: false, error: "durationSeconds must be a number from 0 to 10800" };
@@ -72,8 +83,23 @@ export function parseMetrics(input) {
     return { ok: false, error: "primaryColors must be hex codes or plain color names" };
   }
 
+  // Optional counts the app works out on the device by comparing the child's strokes with the
+  // lesson step or with their own rule. Whole numbers only, each pair together, never above
+  // its total. They carry no drawing data.
+  const countOk = (value, max) => Number.isInteger(value) && value >= 0 && value <= max;
+  const step = stepShapesExpected !== undefined || stepShapesDrawn !== undefined;
+  if (step && !(countOk(stepShapesExpected, MAX_STEP_SHAPES) && countOk(stepShapesDrawn, stepShapesExpected))) {
+    return { ok: false, error: `stepShapesExpected and stepShapesDrawn must be whole numbers, drawn at most expected, expected at most ${MAX_STEP_SHAPES}` };
+  }
+  const rule = ruleStrokes !== undefined || ruleFollowed !== undefined;
+  if (rule && !(countOk(ruleStrokes, MAX_STROKES) && countOk(ruleFollowed, ruleStrokes))) {
+    return { ok: false, error: "ruleStrokes and ruleFollowed must be whole numbers, followed at most strokes" };
+  }
+
   const metrics = { durationSeconds, strokeCount, primaryColors: [...primaryColors] };
   if (elapsedSeconds !== undefined) metrics.elapsedSeconds = elapsedSeconds;
+  if (step) Object.assign(metrics, { stepShapesExpected, stepShapesDrawn });
+  if (rule) Object.assign(metrics, { ruleStrokes, ruleFollowed });
   return { ok: true, metrics };
 }
 

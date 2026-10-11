@@ -16,6 +16,31 @@ const MAX_PAUSE_MS = 5000; // pauses longer than this do not count as drawing ti
 const MIN_COLOR_SHARE = 0.1; // a color counts once it is in at least 10% of the strokes
 const MIN_STROKES_FOR_DIVERSITY = 5;
 
+// What is kept about a finished stroke, on this device only: its kind, size, color and when it
+// ended. There are no coordinates in it. It lets the app check a lesson step or the child's own
+// rule, and only counts of those checks ever leave the device.
+export type StrokeSummary = { kind: StrokeKind; length: number; width: number; height: number; color: string; endedAtMs: number };
+
+const MAX_SUMMARIES = 1000;
+
+/** Length and bounding-box size of a stroke, in pixels. */
+export function strokeGeometry(points: Point[]): { length: number; width: number; height: number } {
+  let length = 0;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  points.forEach((point, i) => {
+    minX = Math.min(minX, point.x);
+    minY = Math.min(minY, point.y);
+    maxX = Math.max(maxX, point.x);
+    maxY = Math.max(maxY, point.y);
+    if (i > 0) length += Math.hypot(point.x - points[i - 1].x, point.y - points[i - 1].y);
+  });
+  if (points.length === 0) return { length: 0, width: 0, height: 0 };
+  return { length: Math.round(length), width: Math.round(maxX - minX), height: Math.round(maxY - minY) };
+}
+
 export function classifyStroke(points: Point[]): StrokeKind {
   if (points.length < 2) return "dot";
 
@@ -73,6 +98,8 @@ export function createStrokeTracker() {
   let currentColor = "";
   const kinds: Record<StrokeKind, number> = { dot: 0, line: 0, loop: 0, zigzag: 0, curve: 0 };
   const colors = new Map<string, number>();
+  const summaries: StrokeSummary[] = [];
+  let dropped = 0; // summaries pushed out of the cap, so indexes stay absolute
 
   const tick = (nowMs: number) => {
     if (lastEventAt !== null) activeMs += Math.min(Math.max(nowMs - lastEventAt, 0), MAX_PAUSE_MS);
@@ -91,12 +118,21 @@ export function createStrokeTracker() {
     endStroke(nowMs: number) {
       if (!current) return;
       tick(nowMs);
-      kinds[classifyStroke(current)] += 1;
+      const kind = classifyStroke(current);
+      kinds[kind] += 1;
       strokeCount += 1;
       colors.set(currentColor, (colors.get(currentColor) ?? 0) + 1);
+      summaries.push({ kind, ...strokeGeometry(current), color: currentColor, endedAtMs: nowMs });
+      if (summaries.length > MAX_SUMMARIES) {
+        summaries.shift();
+        dropped += 1;
+      }
       current = null;
     },
     strokeCount: () => strokeCount,
+    /** Finished strokes from the given absolute stroke number on (0 is the first stroke drawn). Copies, never the live list. */
+    summariesSince: (fromStroke: number): StrokeSummary[] =>
+      summaries.slice(Math.max(0, fromStroke - dropped)).map((summary) => ({ ...summary })),
     /** The statistics the server expects, or null when nothing has been drawn yet. */
     snapshot(): CanvasMetrics | null {
       if (strokeCount === 0) return null;
@@ -118,6 +154,8 @@ export function createStrokeTracker() {
       currentColor = "";
       for (const kind of STROKE_KINDS) kinds[kind] = 0;
       colors.clear();
+      summaries.length = 0;
+      dropped = 0;
     },
   };
 }

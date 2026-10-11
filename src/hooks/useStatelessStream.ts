@@ -10,6 +10,12 @@ export type CanvasMetrics = {
   elapsedSeconds?: number;
   shapeDiversityScore?: number;
   primaryColors?: string[];
+  // Counts worked out on the device by comparing stroke kinds with the lesson step or with the
+  // child's own rule (src/lib/strokeCheck.ts). Counts only; each pair goes together.
+  stepShapesExpected?: number;
+  stepShapesDrawn?: number;
+  ruleStrokes?: number;
+  ruleFollowed?: number;
 };
 
 // The help a child can ask for. Must match COACHING_MODES in server/evaluateMetrics.js.
@@ -51,6 +57,7 @@ type Reply = {
 // Optional override, for example wss://muse.example.com/ws. Not a secret: the Gemini key never reaches the browser.
 const SOCKET_URL = (import.meta.env.VITE_MUSE_WS_URL as string | undefined) ?? "";
 const REPLY_TIMEOUT_MS = 15000;
+const CONNECT_TIMEOUT_MS = 8000; // a server that never answers fails after this, not after the browser's own minute-long wait
 
 function socketUrl() {
   if (SOCKET_URL) return SOCKET_URL;
@@ -87,11 +94,19 @@ export const useStatelessStream = () => {
         if (existing && existing.readyState === WebSocket.OPEN) return resolve(existing);
         closeSocket();
         const socket = new WebSocket(socketUrl());
+        const timer = setTimeout(() => {
+          socket.close();
+          reject(new Error("Could not reach the coach"));
+        }, CONNECT_TIMEOUT_MS);
         socket.onopen = () => {
+          clearTimeout(timer);
           socketRef.current = socket;
           resolve(socket);
         };
-        socket.onerror = () => reject(new Error("Could not reach the coach"));
+        socket.onerror = () => {
+          clearTimeout(timer);
+          reject(new Error("Could not reach the coach"));
+        };
         socket.onclose = () => {
           if (socketRef.current === socket) socketRef.current = null;
         };

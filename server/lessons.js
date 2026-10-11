@@ -17,6 +17,7 @@ export const LESSON_CATALOG = {
   "cozy-room": { title: "Cozy room", style: "realism" },
   "little-train": { title: "Little train", style: "realism" },
   "tall-building": { title: "Tall building", style: "realism" },
+  "friendly-fox": { title: "Friendly fox", style: "realism" },
   "bamboo-stalk": { title: "Bamboo stalk", style: "sumi-e" },
   "ink-apple": { title: "Ink apple", style: "sumi-e" },
   "city-panel": { title: "City panel", style: "graphic-novel" },
@@ -172,6 +173,28 @@ function parseJson(text) {
   }
 }
 
+// The stroke kinds that could draw a shape, in the five words the app's stroke classifier uses.
+// Sent with each step instead of the raw shapes, so the app can check on the device, with no
+// drawing data leaving it, whether the child has drawn what the step asks for. Generous on
+// purpose: a wobbly circle can read as a curve, and a box may be one loop or four lines.
+const SMALL_ROUND_UNITS = 4; // a round shape this small is a dot when a child draws it
+export function acceptedKinds(shape) {
+  switch (shape.kind) {
+    case "circle":
+      return shape.r <= SMALL_ROUND_UNITS ? ["loop", "dot", "curve"] : ["loop", "curve"];
+    case "ellipse":
+      return Math.max(shape.rx, shape.ry) <= SMALL_ROUND_UNITS ? ["loop", "dot", "curve"] : ["loop", "curve"];
+    case "rect":
+      return ["loop", "line", "curve"];
+    case "line":
+      return ["line", "curve"];
+    case "polyline":
+      return ["line", "zigzag", "curve", "loop"];
+    default:
+      return ["curve", "loop", "line", "zigzag"];
+  }
+}
+
 async function generateLesson(id, { ai, model }) {
   const { title, style } = LESSON_CATALOG[id];
   const ask = (extra = "") =>
@@ -200,6 +223,7 @@ async function generateLesson(id, { ai, model }) {
         copy: step.copy,
         demo: step.demo,
         imageUrl: stepPicture(lesson.steps, i),
+        expects: step.shapes.map(acceptedKinds),
       }));
     }
   }
