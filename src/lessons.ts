@@ -7,6 +7,8 @@
 //
 // See LESSON_API.md for what the server should send back.
 
+import { createLessonLoader } from "./lib/lessonLoader";
+
 export type IconName =
   | "apple"
   | "bamboo"
@@ -135,14 +137,39 @@ function isValidSteps(data: unknown): data is LessonStep[] {
   );
 }
 
-const API_URL = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "");
-
-export async function getLessonSteps(lesson: Lesson): Promise<LessonStep[]> {
-  const fallback = starterSteps[lesson.id] ?? genericSteps(lesson);
-  if (!API_URL) return fallback;
-
+// The lesson server. VITE_API_URL wins; otherwise it is the same server as the coach
+// (VITE_MUSE_WS_URL, e.g. wss://host/ws becomes https://host).
+function lessonServer(): string | undefined {
+  const explicit = import.meta.env.VITE_API_URL as string | undefined;
+  if (explicit) return explicit.replace(/\/$/, "");
+  const ws = import.meta.env.VITE_MUSE_WS_URL as string | undefined;
+  if (!ws) return undefined;
   try {
-    const res = await fetch(`${API_URL}/api/lessons/${encodeURIComponent(lesson.id)}?style=${lesson.style}`);
+    const url = new URL(ws);
+    url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+    return url.origin;
+  } catch {
+    return undefined;
+  }
+}
+
+const API_URL = lessonServer();
+// A child waits at most this long for the server's lesson. After that the built-in steps are
+// used straight away, and the request carries on in the background so the next time the
+// lesson is opened the finished steps are already here.
+const LESSON_WAIT_MS = 6_000;
+// How long that background request may run before it is given up (the server tries twice).
+const LESSON_REQUEST_TIMEOUT_MS = 45_000;
+
+async function fetchServerSteps(id: string): Promise<LessonStep[] | null> {
+  const lesson = lessons.find((candidate) => candidate.id === id);
+  if (!API_URL || !lesson) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LESSON_REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${API_URL}/api/lessons/${encodeURIComponent(id)}?style=${lesson.style}`, {
+      signal: controller.signal,
+    });
     if (!res.ok) throw new Error(`Server answered ${res.status}`);
     const body = await res.json();
     const steps = Array.isArray(body) ? body : body?.steps;
@@ -150,6 +177,21 @@ export async function getLessonSteps(lesson: Lesson): Promise<LessonStep[]> {
     return steps;
   } catch (err) {
     console.warn("Using starter steps:", err);
-    return fallback;
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+const loader = createLessonLoader<LessonStep>({ fetchSteps: fetchServerSteps, waitMs: LESSON_WAIT_MS });
+
+export async function getLessonSteps(lesson: Lesson): Promise<LessonStep[]> {
+  const fallback = starterSteps[lesson.id] ?? genericSteps(lesson);
+  if (!API_URL) return fallback;
+  return loader.get(lesson.id, fallback);
+}
+
+/** Starts loading these lessons from the server now, so they open instantly when tapped. */
+export function prefetchLessonSteps(items: Lesson[]): void {
+  if (API_URL) loader.prefetch(items.map((lesson) => lesson.id));
 }

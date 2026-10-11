@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, ty
 import {
   getLessonSteps,
   lessonsForStyle,
+  prefetchLessonSteps,
   styleById,
   styles,
   type IconName,
@@ -382,6 +383,8 @@ export default function App() {
   const pickStyle = (next: StyleId) => {
     setStyle(next);
     setScreen("lessons");
+    // Start loading this style's lessons now, while the child chooses, so they open instantly.
+    prefetchLessonSteps(lessonsForStyle(next));
   };
   const pickLesson = (next: Lesson) => {
     setLesson(next);

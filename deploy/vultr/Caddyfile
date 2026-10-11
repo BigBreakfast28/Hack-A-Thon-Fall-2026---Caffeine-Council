@@ -27,6 +27,11 @@
 		reverse_proxy muse:8080
 	}
 
+	# Lesson plans (GET /api/lessons/<id>): general content, no child data in or out.
+	handle /api/lessons/* {
+		reverse_proxy muse:8080
+	}
+
 	# Everything else is not ours.
 	handle {
 		respond "Not found" 404

@@ -22,6 +22,8 @@ services:
       MAGIC_TICKET_SECRET: ${MAGIC_TICKET_SECRET:-}
       # Signs the chat history. If unset, a random one is made at start and chats restart after a deploy.
       HISTORY_SECRET: ${HISTORY_SECRET:-}
+      # Set to "off" to skip generating the lessons at start-up (one Gemini call per lesson, once per start).
+      LESSON_PREWARM: ${LESSON_PREWARM:-}
       SOLANA_RPC_URL: ${SOLANA_RPC_URL:-}
       WALLET_MIN_LAMPORTS: ${WALLET_MIN_LAMPORTS:-1}
     # Immutable root filesystem; writes land in RAM and vanish when the container stops.
