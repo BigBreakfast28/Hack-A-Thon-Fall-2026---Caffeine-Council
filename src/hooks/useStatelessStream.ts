@@ -2,12 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 export type ChatTurn = { role: "user" | "model"; text: string };
 
+// Only strokes and time drive coaching. The server ignores shape variety, and colors are optional context.
 export type CanvasMetrics = {
   durationSeconds: number;
   strokeCount: number;
-  shapeDiversityScore: number;
-  primaryColors: string[];
+  shapeDiversityScore?: number;
+  primaryColors?: string[];
 };
+
+// The help a child can ask for. Must match COACHING_MODES in server/evaluateMetrics.js.
+export type CoachingMode = "challenge" | "idea" | "finish" | "cheer";
 
 // What the server can verify. The client never says "I paid"; it sends proof.
 export type AccessCredential =
@@ -64,9 +68,12 @@ export const useStatelessStream = () => {
     [closeSocket],
   );
 
-  /** Sends one snapshot and waits for one reply. Returns the coaching text, or null on failure. */
+  /**
+   * Sends one snapshot and waits for one reply. Returns the coaching text, or null on failure.
+   * `coachingMode` is the kind of help the child picked; leave it out to let the server choose.
+   */
   const dispatchCanvasTelemetry = useCallback(
-    async (metrics: CanvasMetrics, frameDataUrl?: string): Promise<string | null> => {
+    async (metrics: CanvasMetrics, frameDataUrl?: string, coachingMode?: CoachingMode): Promise<string | null> => {
       setPending(true);
       setError(null);
       try {
@@ -95,7 +102,7 @@ export const useStatelessStream = () => {
           }, REPLY_TIMEOUT_MS);
           socket.addEventListener("message", onMessage);
           socket.addEventListener("close", onClose);
-          socket.send(JSON.stringify({ canvasMetrics: metrics, frameData: frameDataUrl, history: chatHistory, credential }));
+          socket.send(JSON.stringify({ canvasMetrics: metrics, frameData: frameDataUrl, coachingMode, history: chatHistory, credential }));
         });
         if (reply.error || !reply.text || !reply.history) throw new Error(reply.error ?? "Unexpected reply");
         setChatHistory(reply.history);

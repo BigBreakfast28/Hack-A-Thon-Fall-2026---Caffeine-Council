@@ -16,8 +16,8 @@ Browser / iPad  --wss-->  TLS proxy  --ws-->  server/ (Node, RAM only)  --HTTPS-
 
 ## What is here
 
-- `server/pedagogy.js`: the pedagogy modules (original text, plus a neutral `general_encouragement` default).
-- `server/evaluateMetrics.js`: the rule matrix and strict validation of canvas statistics.
+- `server/pedagogy.js`: five modules (`constraint_challenge`, `process_feedback`, `problem_finding`, `autonomy_support`, and a plain `general_encouragement` default and control). Only `framework` and `prompts_for_kids` reach the model; `studies`, `evidence` and `caveat` are for the team.
+- `server/evaluateMetrics.js`: the rule matrix, the coaching mode check and strict validation of canvas statistics.
 - `server/muse.js`: the request pipeline (validate, verify access, choose module, build prompt, call Gemini).
 - `server/access.js`: stateless access verification (see below).
 - `server/server.js`: WebSocket server on `/ws`, plus `GET /api/health`. Origin check, 1 MB message cap, 20 messages a minute per connection, one request at a time.
@@ -26,6 +26,7 @@ Browser / iPad  --wss-->  TLS proxy  --ws-->  server/ (Node, RAM only)  --HTTPS-
 - `src/hooks/useStatelessStream.ts`: client hook over WebSocket. History and credential live in React state. Used by the canvas and the Grown-ups screen in `src/App.tsx`.
 - `src/lib/exportFrame.ts`: half-size, 70% JPEG snapshot flattened onto the paper color (used only when `VITE_MUSE_SEND_FRAMES=1`).
 - `src/lib/canvasTelemetry.ts`: the drawing statistics the coach receives (see below).
+- `RESEARCH.md`: the evidence behind each module with its caveats, the old-to-new module mapping, the pilot evaluation plan and the sources to drop or verify.
 - `audit-compliance.sh`: zero-data tripwire (`npm run audit:zero-data`).
 - Tests: `npm run test:server` (fake AI client, real WebSocket, real ed25519 keys) and `npm run test:client` (drawing statistics and the client-to-server wire contract).
 - The gallery no longer uses `localStorage`; saved art lives in memory with a "Wipe volatile memory" button. Fonts are self-hosted, so no request goes to Google Fonts.
@@ -34,8 +35,10 @@ Browser / iPad  --wss-->  TLS proxy  --ws-->  server/ (Node, RAM only)  --HTTPS-
 
 - While the child draws, `src/lib/canvasTelemetry.ts` keeps four numbers in a plain object (never in React state): `strokeCount`, `durationSeconds`, `shapeDiversityScore` and `primaryColors`. Stroke coordinates exist only until the stroke ends, then are classified and discarded.
 - `durationSeconds` is active drawing time: pauses longer than 5 seconds do not count, so a child who walks away does not trigger the "long session" module.
-- `shapeDiversityScore` is the normalized entropy of five stroke kinds (dot, line, loop, zigzag, curve), 0 until at least 5 strokes. `primaryColors` are the colors used in at least 10% of strokes. These are simple heuristics, not measurements of ability.
+- `shapeDiversityScore` is the normalized entropy of five stroke kinds (dot, line, loop, zigzag, curve), 0 until at least 5 strokes. `primaryColors` are the colors used in at least 10% of strokes. These are simple heuristics, not measurements of ability. The server ignores the shape score; only strokes, time and the child's chosen mode pick a module, and colors are optional context for the prompt.
 - Sunny is asked in two ways: the sparkle button in the tool dock, and automatically after a 4 second pause once there have been at least 10 new strokes since the last check-in.
+- The request can also carry `coachingMode` (`challenge`, `idea`, `finish` or `cheer`): the kind of help the child picked. It selects the module and tells the model the child chose it. It is optional and validated; anything else is a 400. The hook takes it as the third argument of `dispatchCanvasTelemetry`.
+- The server keeps a short progress note per turn in the client-owned history ("Update: 40 strokes, 130 s.") instead of the colors, so later replies can mention how the drawing has changed.
 - The reply appears as a note over the paper that ignores touches (so it never blocks drawing) and fades after 12 seconds. It is visible on any screen size, and Sunny's mood changes while she thinks.
 - By default only the four numbers leave the device. Setting `VITE_MUSE_SEND_FRAMES=1` also sends a small JPEG snapshot.
 - The ticket is entered by a grown-up on the Grown-ups screen, held in memory only, and cleared by "Wipe volatile memory". There is no screen for the wallet gate; that path needs a wallet adapter on the client.
@@ -63,13 +66,13 @@ Gemini API Additional Terms of Service (effective 2026-03-23) and Google's data 
 
 So the accurate claim is: "our servers store nothing, and what we send to Google is covered by Google's paid-tier terms, including up to 55 days of abuse-monitoring retention." Do not say "zero logs", "Google never saves this", or "absolute COPPA/FERPA compliance". Those are legal questions this document does not answer.
 
-Telemetry-only mode (no `frameData`) sends no image of the child's drawing to Google, only strokes, speed and color names. It is the privacy-preferred demo mode; the model then coaches from numbers, not from the picture.
+Telemetry-only mode (no `frameData`) sends no image of the child's drawing to Google, only the stroke count, time and color names. It is the privacy-preferred demo mode; the model then coaches from numbers, not from the picture.
 
 ## Where the code differs from the original design notes, and why
 
 - `tokenValid` from the client is gone. It let anyone skip the paywall by sending `true`. Access is now verified on the server.
 - `store: false` was removed from the Gemini call (see above).
-- The rule matrix now includes the limited-palette rule (`primaryColors.length <= 2` and `strokeCount > 30`). The original fell back to "resourceful problem solving" for every session that matched nothing, so children with ordinary palettes would have been coached about limited palettes. Unmatched sessions now get `general_encouragement`.
+- The rule matrix and modules were rewritten against the research (`RESEARCH.md`). The original rules keyed on speed, color count and stroke counts to infer grit, agency or spatial ability, which drawing statistics do not measure. Now: the child's chosen mode wins; more than 600 s of active drawing gets `process_feedback` (specific feedback and a break offer); at most 5 strokes after 45 s gets `constraint_challenge`; everything else gets `general_encouragement`. `shapeDiversityScore` is still accepted but ignored. The old module keys are gone (mapping in `RESEARCH.md`), and `target_mobility_skills` became `coaching_goals`.
 - `primaryColors` must be hex codes or plain color names. Free text there would be a way to put instructions into the prompt.
 - The system prompt is the safety guardrails, then the module's `framework` and `prompts_for_kids`. The `studies` list is not sent to the model, and the phrase "designed for under-resourced children" is gone: the app does not know any child's circumstances, and the guardrails forbid guessing them.
 - `frameData` (the snapshot) is optional.
@@ -78,11 +81,14 @@ Telemetry-only mode (no `frameData`) sends no image of the child's drawing to Go
 
 ## Open points for the pedagogy owner
 
-These are wording and claims, not bugs, so they are left for the owner to decide:
+The modules and rules were revised against the research in `RESEARCH.md`. Still open:
 
-- The prompts say to praise a limited palette or a mistake as an "elite design constraint" and to frame resourcefulness as a "superpower". For a child who really does have few supplies, that can read as "be glad you have less". Consider framing it as "you made something great with what you had" without the status language.
-- Mullainathan & Shafir (2013) argues scarcity burdens attention; it does not show that limits build resourcefulness. Hart & Risley (1995) is widely contested. Both are risky to cite as support in a pitch.
-- "Target mobility skills" are not measured by stroke counts or timing. Present them as the coaching goals, not as outcomes the app detects.
+- The thresholds (600 s, 5 strokes, 45 s) are untuned placeholders. Tune them in a pilot.
+- The blank-page rule cannot fire from the current canvas: the tracker counts only active time and caps each pause at 5 s, so 5 strokes show at most 45 s. Either send elapsed time as well or rely on the child choosing "challenge".
+- The canvas has no buttons for `coachingMode` yet (Cameron's area). Until it does, the server picks from the pacing rules and the child never chooses.
+- Present the `coaching_goals` as what the coach aims at, not as outcomes the app detects. Drawing statistics do not measure grit, agency or ability.
+- Do not claim Sunny improves creativity. The pilot plan in `RESEARCH.md` is how to find out.
+- Mullainathan & Shafir (2013), Hart & Risley (1995) and Mischel (1989) should not be cited as support in a pitch.
 
 ## Open decisions
 
@@ -113,7 +119,7 @@ MAGIC_TICKET_SECRET=... node mint-ticket.js 24
 npm install && VITE_MUSE_WS_URL=ws://localhost:8080/ws npm run dev
 # add VITE_MUSE_SEND_FRAMES=1 to also send a small snapshot (off by default: statistics only)
 
-# tests: server (35), client (12: drawing statistics and the wire contract)
+# tests: server (42), client (13: drawing statistics and the wire contract)
 npm run test:server && npm run test:client
 
 # zero-data tripwire

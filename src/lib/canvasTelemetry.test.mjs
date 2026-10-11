@@ -78,22 +78,46 @@ test("coordinates are not kept after a stroke ends", () => {
 });
 
 test("contract: tracker output passes the server's validation and picks the expected module", () => {
+  // A busy, fast two-color session is ordinary: speed, stroke volume and palette no longer pick a module.
   const tracker = createStrokeTracker();
   let t = 0;
-  // 160 strokes with two colors: should land in the grit module (more than 150 strokes).
   for (let i = 0; i < 160; i++) draw(tracker, i % 2 ? line() : arc(), i % 3 ? "#E97962" : "#6F9FC6", (t += 200), (t += 200));
-  const snapshot = tracker.snapshot();
-  const parsed = parseRequest({ canvasMetrics: snapshot, history: [] });
+  const parsed = parseRequest({ canvasMetrics: tracker.snapshot(), history: [] });
   assert.equal(parsed.ok, true, JSON.stringify(parsed));
-  assert.equal(evaluateMetrics(parsed.metrics), "delayed_gratification_and_grit");
+  assert.equal(evaluateMetrics(parsed.metrics), "general_encouragement");
 
-  // A short two-color session lands in the limited-palette module.
+  // A short two-color session is ordinary too.
   const small = createStrokeTracker();
   t = 0;
   for (let i = 0; i < 35; i++) draw(small, i % 2 ? line() : arc(), i % 2 ? "#E97962" : "#6F9FC6", (t += 1500), (t += 1500));
   const smallParsed = parseRequest({ canvasMetrics: small.snapshot(), history: [] });
   assert.equal(smallParsed.ok, true, JSON.stringify(smallParsed));
-  assert.equal(evaluateMetrics(smallParsed.metrics), "resourceful_problem_solving");
+  assert.equal(evaluateMetrics(smallParsed.metrics), "general_encouragement");
+
+  // More than 10 minutes of active drawing time earns specific feedback and a break offer.
+  const long = createStrokeTracker();
+  t = 0;
+  for (let i = 0; i < 70; i++) draw(long, line(), "#E97962", (t += 5000), (t += 5000));
+  const longParsed = parseRequest({ canvasMetrics: long.snapshot(), history: [] });
+  assert.equal(longParsed.ok, true, JSON.stringify(longParsed));
+  assert.ok(longParsed.metrics.durationSeconds > 600, String(longParsed.metrics.durationSeconds));
+  assert.equal(evaluateMetrics(longParsed.metrics), "process_feedback");
+
+  // What the child chooses wins, and the mode is validated by the same parser.
+  const chosen = parseRequest({ canvasMetrics: tracker.snapshot(), coachingMode: "cheer", history: [] });
+  assert.equal(chosen.ok, true, JSON.stringify(chosen));
+  assert.equal(evaluateMetrics(chosen.metrics, chosen.mode), "autonomy_support");
+});
+
+test("the blank-page rule cannot fire from this tracker: each pause is capped at 5 s, so 5 strokes show at most 45 s", () => {
+  const tracker = createStrokeTracker();
+  let t = 0;
+  for (let i = 0; i < 5; i++) draw(tracker, line(), "#E97962", (t += 60000), (t += 60000));
+  const { durationSeconds, strokeCount } = tracker.snapshot();
+  assert.equal(strokeCount, 5);
+  assert.ok(durationSeconds <= 45, String(durationSeconds));
+  // The child can still ask for a starting challenge by choosing it.
+  assert.equal(evaluateMetrics(tracker.snapshot(), "challenge"), "constraint_challenge");
 });
 
 test("every kind is reachable", () => {

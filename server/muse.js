@@ -1,35 +1,36 @@
 // Request pipeline for one coaching reply. It takes a parsed JSON payload and returns
 // { status, body }. It never touches disk, never logs request content, and keeps nothing
 // after it returns: the client owns the conversation and resends it every time.
-import { evaluateMetrics, parseMetrics } from "./evaluateMetrics.js";
+import { evaluateMetrics, parseCoachingMode, parseMetrics } from "./evaluateMetrics.js";
 import { pedagogyData } from "./pedagogy.js";
 
 export const MAX_HISTORY_TURNS = 20;
 const MAX_TURN_CHARS = 2000;
 const MAX_FRAME_CHARS = 600_000; // about 450 KB of JPEG once decoded
 const UPSTREAM_TIMEOUT_MS = 10_000;
-const SHARED_DRAWING_TURN = "(I shared my drawing)";
 
 // These rules are always sent and always win over a pedagogy module. They are what
 // keeps the coaching safe for a child whatever the module text says.
 const GUARDRAILS = [
   "You are Sunny, a warm art coach for children aged 5 and up.",
   "Write directly to the child in at most 3 short, simple sentences. Keep it empowering.",
-  "Praise effort and choices, never talent. Never say a drawing is bad or wrong.",
+  "Praise only what the child did or chose, never what the child is: do not call them talented, smart, gifted or an artist. Never say a drawing is bad or wrong.",
+  "Never rate, score or compare a drawing, and never compare the child with other children.",
   "Never describe or guess the child's personality, feelings, abilities, family, money, or background.",
   "Never ask for names, places, photos of people, or any personal information.",
   "Never draw or paint for the child. Suggest one small next step they can do themselves.",
-  "End with one open question that invites the child to choose what happens next.",
+  "Offer choices and accept no for an answer. End with one open question that invites the child to choose what happens next.",
   "Stay on art. If asked about anything else, kindly bring the talk back to the drawing.",
   "Do not mention brands, characters owned by companies, or real people.",
   "Do not name researchers, studies or theories.",
 ].join(" ");
 
-export function buildSystemInstruction(pedagogy) {
+export function buildSystemInstruction(pedagogy, chosenByChild = false) {
   return [
     GUARDRAILS,
     `Coaching focus: ${pedagogy.framework}.`,
     `How to coach: ${pedagogy.prompts_for_kids}`,
+    ...(chosenByChild ? ["The child chose this kind of help themselves, so follow it closely."] : []),
     "If the coaching focus ever conflicts with the safety rules above, the safety rules win.",
   ].join("\n\n");
 }
@@ -74,22 +75,31 @@ export function parseRequest(payload) {
   }
   const metrics = parseMetrics(payload.canvasMetrics);
   if (!metrics.ok) return metrics;
+  const mode = parseCoachingMode(payload.coachingMode);
+  if (!mode.ok) return mode;
   const history = parseHistory(payload.history);
   if (!history.ok) return history;
   const frame = parseFrame(payload.frameData);
   if (!frame.ok) return frame;
-  return { ok: true, metrics: metrics.metrics, history: history.history, frame: frame.frame };
+  return { ok: true, metrics: metrics.metrics, mode: mode.mode, history: history.history, frame: frame.frame };
 }
 
+/** What the model is told about the drawing right now. Speed is deliberately left out. */
 export function telemetryText(metrics, hasFrame) {
   const { durationSeconds, strokeCount, primaryColors } = metrics;
-  const rate = durationSeconds > 0 ? (strokeCount / durationSeconds).toFixed(1) : "0.0";
-  const colors = primaryColors.length ? primaryColors.join(", ") : "none";
+  const colors = primaryColors.length ? `, main colors: ${primaryColors.join(", ")}` : "";
   return (
-    `Drawing so far: ${strokeCount} strokes in ${Math.round(durationSeconds)} seconds ` +
-    `(${rate} strokes per second), main colors: ${colors}.` +
+    `Drawing so far: ${strokeCount} strokes in ${Math.round(durationSeconds)} seconds${colors}.` +
     (hasFrame ? " A picture of my canvas is attached." : "")
   );
+}
+
+/**
+ * The note kept in the history for this update. It is short and has no colors or image, so
+ * later replies can mention change since earlier ("you added a lot since a minute ago").
+ */
+export function progressNote(metrics) {
+  return `Update: ${metrics.strokeCount} strokes, ${Math.round(metrics.durationSeconds)} s.`;
 }
 
 /** Maps the client's history plus the new drawing update into Gemini `contents`. */
@@ -130,7 +140,7 @@ export async function processMuse(payload, { ai, model, verifyAccess }) {
   }
   if (!access.ok) return { status: 401, body: { error: "Access validation failed." } };
 
-  const pedagogy = pedagogyData[evaluateMetrics(parsed.metrics)];
+  const pedagogy = pedagogyData[evaluateMetrics(parsed.metrics, parsed.mode)];
   try {
     // No `store` flag: generateContent keeps no developer-side state, and Google may still
     // retain prompts for abuse monitoring. See ARCHITECTURE.md.
@@ -138,7 +148,7 @@ export async function processMuse(payload, { ai, model, verifyAccess }) {
       ai.models.generateContent({
         model,
         contents: buildContents(parsed.history, parsed.metrics, parsed.frame),
-        config: { systemInstruction: buildSystemInstruction(pedagogy) },
+        config: { systemInstruction: buildSystemInstruction(pedagogy, Boolean(parsed.mode)) },
       }),
       UPSTREAM_TIMEOUT_MS,
     );
@@ -147,7 +157,7 @@ export async function processMuse(payload, { ai, model, verifyAccess }) {
 
     const history = trimHistory([
       ...parsed.history,
-      { role: "user", text: SHARED_DRAWING_TURN },
+      { role: "user", text: progressNote(parsed.metrics) },
       { role: "model", text },
     ]);
     return { status: 200, body: { text, history } };
