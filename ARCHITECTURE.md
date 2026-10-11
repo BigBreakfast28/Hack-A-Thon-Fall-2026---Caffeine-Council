@@ -34,7 +34,7 @@ Browser / iPad  --wss-->  TLS proxy  --ws-->  server/ (Node, RAM only)  --HTTPS-
 - `src/lib/exportFrame.ts`: half-size, 70% JPEG snapshot flattened onto the paper color (used only when `VITE_MUSE_SEND_FRAMES=1`).
 - `src/lib/canvasTelemetry.ts`: the drawing statistics the coach receives (see below).
 - `RESEARCH.md`: the evidence behind each module with its caveats, the old-to-new module mapping, the pilot evaluation plan and the sources to drop or verify.
-- `audit-compliance.sh`: zero-data tripwire (`pnpm run audit:zero-data`).
+- `audit-compliance.sh`: zero-data tripwire (`pnpm run audit:zero-data`). It greps `src/` and `server/` for storage, tracking, logging and disk-writing code. It also checks the page shell: `index.html`, `public/` and `vite.config.ts` for unexpected external hosts, `.figma/make/site.json` for an analytics or custom-script switch, and both `package.json` files for tracker or logging package names. Container and Vultr settings are checked too. It is a tripwire, not a proof: it cannot see what a dependency does.
 - Tests: `pnpm run test:server` (fake AI client, real WebSocket, real ed25519 keys) and `pnpm run test:client` (drawing statistics and the client-to-server wire contract).
 - The gallery no longer uses `localStorage`; saved art lives in memory with a "Wipe volatile memory" button. Fonts are self-hosted, so no request goes to Google Fonts.
 
