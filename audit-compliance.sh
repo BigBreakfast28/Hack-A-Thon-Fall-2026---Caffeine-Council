@@ -9,6 +9,9 @@
 # provider logs or what the law requires. A plugin that phones home without a URL in the
 # config, or a tracker with an innocent package name, would pass.
 #
+# It also fails on a network call (fetch, WebSocket, XMLHttpRequest, beacon, EventSource) in
+# src/ that is outside the reviewed files, so a new one has to be read before it ships.
+#
 # Run from anywhere:  sh audit-compliance.sh     (exit code 1 on any finding)
 cd "$(dirname "$0")" || exit 2
 
@@ -75,6 +78,26 @@ if [ -n "$EXTERNAL_HOSTS" ] || [ -n "$SITE_SWITCHES" ] || [ -n "$TRACKER_DEPS" ]
     FAIL_AUDIT=1
 else
     echo "✅ SUCCESS: Page shell and build config: no unexpected external hosts, no analytics or custom-script switch, no tracker packages."
+fi
+
+# Network call sites in the client. Anything that talks to a server has to be in this short list,
+# so a new fetch, socket, beacon or event stream cannot slip in without someone reading it. The
+# list is by file: it does not know where a call goes (the hosts come from VITE_ variables at
+# build time), so those hosts still have to be ones we run or name in the privacy statement.
+# Test files and comment lines are skipped, and \b keeps "prefetch(" from matching.
+NETWORK_ALLOWED='src/hooks/useStatelessStream[.]ts|src/lessons[.]ts'
+NETWORK_SITES=$(grep -rnE '\bfetch\(|new[[:space:]]+WebSocket|XMLHttpRequest|sendBeacon|new[[:space:]]+EventSource|importScripts|navigator\.serviceWorker' ./src \
+  --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' --include='*.mjs' 2>/dev/null \
+  | grep -vE '\.test\.' \
+  | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|\*|/\*)' \
+  | grep -vE "^\./($NETWORK_ALLOWED):")
+
+if [ -n "$NETWORK_SITES" ]; then
+    echo "❌ CRITICAL COMPLIANCE FAILURE: network calls outside the reviewed files (src/hooks/useStatelessStream.ts, src/lessons.ts):"
+    echo "$NETWORK_SITES" | sed 's/^/    /'
+    FAIL_AUDIT=1
+else
+    echo "✅ SUCCESS: Network calls in the client are only in the reviewed files (src/hooks/useStatelessStream.ts, src/lessons.ts)."
 fi
 
 # Container: no volumes, and a read-only root filesystem.
